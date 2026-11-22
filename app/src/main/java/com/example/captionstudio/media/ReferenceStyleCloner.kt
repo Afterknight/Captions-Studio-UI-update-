@@ -680,28 +680,31 @@ object ReferenceStyleCloner {
   }
 
   private fun averageClusterColor(colors: List<Int>): Int {
-    if (colors.isEmpty()) return Color.WHITE
+    if (colors.isEmpty()) return 0xFFFFFFFF.toInt()
     var r = 0L
     var g = 0L
     var b = 0L
     for (c in colors) {
-      r += Color.red(c)
-      g += Color.green(c)
-      b += Color.blue(c)
+      r += (c ushr 16) and 0xFF
+      g += (c ushr 8) and 0xFF
+      b += c and 0xFF
     }
     val n = colors.size.toLong()
-    return Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+    val ar = ((r / n).toInt()).coerceIn(0, 255)
+    val ag = ((g / n).toInt()).coerceIn(0, 255)
+    val ab = ((b / n).toInt()).coerceIn(0, 255)
+    return (0xFF shl 24) or (ar shl 16) or (ag shl 8) or ab
   }
 
   private fun findDominantColor(colors: List<Int>): Int {
-    if (colors.isEmpty()) return Color.WHITE
+    if (colors.isEmpty()) return 0xFFFFFFFF.toInt()
     // Snap into coarse 32-step RGB buckets and pick the most frequent bucket
     val buckets = HashMap<Int, MutableList<Int>>()
     for (c in colors) {
-      val key =
-        (((Color.red(c) shr 5) and 7) shl 6) or
-          (((Color.green(c) shr 5) and 7) shl 3) or
-          ((Color.blue(c) shr 5) and 7)
+      val r = (c ushr 16) and 0xFF
+      val g = (c ushr 8) and 0xFF
+      val b = c and 0xFF
+      val key = (((r ushr 5) and 7) shl 6) or (((g ushr 5) and 7) shl 3) or ((b ushr 5) and 7)
       buckets.getOrPut(key) { mutableListOf() }.add(c)
     }
     val largest = buckets.values.maxByOrNull { it.size } ?: colors
@@ -715,16 +718,16 @@ object ReferenceStyleCloner {
   }
 
   private fun colorDistance(c1: Int, c2: Int): Float {
-    val dr = (Color.red(c1) - Color.red(c2)).toFloat()
-    val dg = (Color.green(c1) - Color.green(c2)).toFloat()
-    val db = (Color.blue(c1) - Color.blue(c2)).toFloat()
+    val dr = (((c1 ushr 16) and 0xFF) - ((c2 ushr 16) and 0xFF)).toFloat()
+    val dg = (((c1 ushr 8) and 0xFF) - ((c2 ushr 8) and 0xFF)).toFloat()
+    val db = ((c1 and 0xFF) - (c2 and 0xFF)).toFloat()
     return sqrt(dr * dr + dg * dg + db * db)
   }
 
   private fun toHexRgb(colorInt: Int): String {
-    val r = Color.red(colorInt)
-    val g = Color.green(colorInt)
-    val b = Color.blue(colorInt)
+    val r = (colorInt ushr 16) and 0xFF
+    val g = (colorInt ushr 8) and 0xFF
+    val b = colorInt and 0xFF
     // Snap near-white to crisp pure white for cleaner typography aesthetics
     return if (r > 235 && g > 235 && b > 235) {
       StudioPalette.WHITE
