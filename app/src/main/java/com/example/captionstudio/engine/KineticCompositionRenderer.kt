@@ -18,9 +18,14 @@ import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.EntryAnimationType
 import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.typography.FontRegistry
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -79,7 +84,20 @@ class KineticCompositionRenderer(private val context: Context) {
     val anchorY: Float,
   )
 
+  private data class FastCacheEntry(
+    val comp: CaptionComposition,
+    val width: Int,
+    val height: Int,
+    val shadowMultiplier: Float,
+    val layout: CachedLayout,
+  )
+
   private val layoutCache = ConcurrentHashMap<String, CachedLayout>()
+  @Volatile private var lastFastEntry: FastCacheEntry? = null
+  private val tempGuideRect = RectF()
+  private val tempSrcRect = Rect()
+  private val tempDstRect = RectF()
+  private val tempBgRect = RectF()
   private val boxPaint =
     Paint(Paint.ANTI_ALIAS_FLAG).apply {
       style = Paint.Style.STROKE
@@ -91,6 +109,7 @@ class KineticCompositionRenderer(private val context: Context) {
     }
 
   fun clearCache() {
+    lastFastEntry = null
     layoutCache.clear()
   }
 
@@ -149,14 +168,13 @@ class KineticCompositionRenderer(private val context: Context) {
     if (drawSelectionGuide && active.id == selectedCompositionId) {
       boxPaint.color = Color.argb(140, 255, 184, 28)
       val halfW = layout.maxWidthPx / 2f + 16f
-      val rect =
-        RectF(
-          (layout.anchorX - halfW).coerceAtLeast(8f),
-          (boxTop - 12f).coerceAtLeast(8f),
-          (layout.anchorX + halfW).coerceAtMost(canvasWidth - 8f),
-          (boxTop + layout.totalHeightPx + 12f).coerceAtMost(canvasHeight - 8f),
-        )
-      canvas.drawRoundRect(rect, 12f, 12f, boxPaint)
+      tempGuideRect.set(
+        (layout.anchorX - halfW).coerceAtLeast(8f),
+        (boxTop - 12f).coerceAtLeast(8f),
+        (layout.anchorX + halfW).coerceAtMost(canvasWidth - 8f),
+        (boxTop + layout.totalHeightPx + 12f).coerceAtMost(canvasHeight - 8f),
+      )
+      canvas.drawRoundRect(tempGuideRect, 12f, 12f, boxPaint)
     }
 
     val useMask =
@@ -190,9 +208,9 @@ class KineticCompositionRenderer(private val context: Context) {
 
     // Pass 2: Occlude behind-subject text cleanly behind speaker hair/head/shoulders
     if (useMask && subjectMaskBitmap != null) {
-      val srcRect = Rect(0, 0, subjectMaskBitmap.width, subjectMaskBitmap.height)
-      val dstRect = RectF(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat())
-      canvas.drawBitmap(subjectMaskBitmap, srcRect, dstRect, maskErasePaint)
+      tempSrcRect.set(0, 0, subjectMaskBitmap.width, subjectMaskBitmap.height)
+      tempDstRect.set(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat())
+      canvas.drawBitmap(subjectMaskBitmap, tempSrcRect, tempDstRect, maskErasePaint)
     }
 
     // Pass 3: Foreground crisp readable elements
@@ -258,31 +276,111 @@ class KineticCompositionRenderer(private val context: Context) {
 
     var alpha = 1f
     var scale = 1f
+    var translateX = 0f
     var translateY = 0f
+    var extraRotationDeg = 0f
     val baseScale = min(canvasWidth, canvasHeight) / 360f
     val slideOffsetUnit = 16f * baseScale
 
-    when (active.entryAnimation) {
-      EntryAnimationType.SCALE_RISE -> {
-        alpha = easedEntry
-        scale = 0.84f + 0.16f * easedEntry
-        translateY = (1f - easedEntry) * slideOffsetUnit * 0.72f
+    val hasDedicatedMotion = el.motionEffect != LayerMotionEffect.NONE
+    val mSpeed = el.motionSpeed.coerceIn(0.4f, 2.2f)
+    val mIntensity = el.motionIntensity.coerceIn(0.25f, 2.0f)
+    val motionElapsedSec = (rawElapsedFromBeat.coerceAtLeast(0f) / 1000f) * mSpeed
+
+    if (!hasDedicatedMotion) {
+      when (active.entryAnimation) {
+        EntryAnimationType.SCALE_RISE -> {
+          alpha = easedEntry
+          scale = 0.84f + 0.16f * easedEntry
+          translateY = (1f - easedEntry) * slideOffsetUnit * 0.72f
+        }
+        EntryAnimationType.SLIDE_UP -> {
+          alpha = easedEntry
+          translateY = (1f - easedEntry) * slideOffsetUnit
+        }
+        EntryAnimationType.FADE_POP -> {
+          alpha = easedEntry
+          scale = 0.76f + 0.24f * easedEntry
+        }
+        EntryAnimationType.STAGGER_REVEAL -> {
+          alpha = easedEntry
+          scale = 0.90f + 0.10f * easedEntry
+          translateY = (1f - easedEntry) * slideOffsetUnit * 0.55f
+        }
+        EntryAnimationType.CUT -> {
+          alpha = if (rawElapsedFromBeat >= 0f) 1f else 0f
+        }
       }
-      EntryAnimationType.SLIDE_UP -> {
-        alpha = easedEntry
-        translateY = (1f - easedEntry) * slideOffsetUnit
-      }
-      EntryAnimationType.FADE_POP -> {
-        alpha = easedEntry
-        scale = 0.76f + 0.24f * easedEntry
-      }
-      EntryAnimationType.STAGGER_REVEAL -> {
-        alpha = easedEntry
-        scale = 0.90f + 0.10f * easedEntry
-        translateY = (1f - easedEntry) * slideOffsetUnit * 0.55f
-      }
-      EntryAnimationType.CUT -> {
-        alpha = if (rawElapsedFromBeat >= 0f) 1f else 0f
+    } else {
+      // Dedicated per-layer motion choreography
+      val layerEntryDurMs = (360f / mSpeed).coerceIn(140f, 760f)
+      val tNorm = (rawElapsedFromBeat.coerceAtLeast(0f) / layerEntryDurMs).coerceIn(0f, 1f)
+      val easeOutCubic = 1f - (1f - tNorm).pow(3)
+      when (el.motionEffect) {
+        LayerMotionEffect.NONE -> Unit
+        LayerMotionEffect.FADE_IN -> {
+          alpha = easeOutCubic
+        }
+        LayerMotionEffect.SLIDE_UP -> {
+          alpha = (tNorm * 1.4f).coerceIn(0f, 1f)
+          translateY = (1f - easeOutCubic) * 28f * baseScale * mIntensity
+        }
+        LayerMotionEffect.SLIDE_DOWN -> {
+          alpha = (tNorm * 1.4f).coerceIn(0f, 1f)
+          translateY = -(1f - easeOutCubic) * 28f * baseScale * mIntensity
+        }
+        LayerMotionEffect.SLIDE_LEFT -> {
+          alpha = (tNorm * 1.4f).coerceIn(0f, 1f)
+          translateX = (1f - easeOutCubic) * 38f * baseScale * mIntensity
+        }
+        LayerMotionEffect.POP_IN -> {
+          val overshoot = applyEasing(tNorm, AnimationEasingType.SPRING_OVERSHOOT)
+          alpha = (tNorm * 2.2f).coerceIn(0f, 1f)
+          scale = (1f - 0.58f * mIntensity.coerceAtMost(1.4f)) + (0.58f * mIntensity.coerceAtMost(1.4f)) * overshoot
+        }
+        LayerMotionEffect.ZOOM_IN -> {
+          alpha = easeOutCubic
+          val startScale = (1f - 0.55f * mIntensity.coerceAtMost(1.4f)).coerceIn(0.25f, 0.9f)
+          scale = startScale + (1f - startScale) * easeOutCubic
+        }
+        LayerMotionEffect.BOUNCE -> {
+          val bounceT = (rawElapsedFromBeat.coerceAtLeast(0f) / (560f / mSpeed)).coerceIn(0f, 1f)
+          val damped = abs(cos(bounceT * PI * 2.5)).toFloat() * exp(-bounceT * 3.2f)
+          alpha = (bounceT * 3.0f).coerceIn(0f, 1f)
+          translateY = -damped * 26f * baseScale * mIntensity
+          scale = 1f + damped * 0.12f * mIntensity
+        }
+        LayerMotionEffect.WIGGLE -> {
+          alpha = (tNorm * 2.5f).coerceIn(0f, 1f)
+          val rad = motionElapsedSec * 9.0f
+          extraRotationDeg = sin(rad) * 5.8f * mIntensity
+          translateX = sin(rad * 0.5f) * 2.4f * baseScale * mIntensity
+        }
+        LayerMotionEffect.PULSE -> {
+          alpha = (tNorm * 2.5f).coerceIn(0f, 1f)
+          scale = 1f + sin(motionElapsedSec * 5.2f) * 0.085f * mIntensity
+        }
+        LayerMotionEffect.FLOAT -> {
+          alpha = easeOutCubic
+          translateY = sin(motionElapsedSec * 3.2f) * 8.5f * baseScale * mIntensity
+          translateX = cos(motionElapsedSec * 1.9f) * 2.2f * baseScale * mIntensity
+        }
+        LayerMotionEffect.WAVE -> {
+          alpha = (tNorm * 2.2f).coerceIn(0f, 1f)
+        }
+        LayerMotionEffect.SWING -> {
+          alpha = easeOutCubic
+          extraRotationDeg = sin(motionElapsedSec * 3.8f) * 8.5f * mIntensity
+        }
+        LayerMotionEffect.SHAKE -> {
+          alpha = (tNorm * 3.0f).coerceIn(0f, 1f)
+          translateX = sin(motionElapsedSec * 34.0f) * 3.2f * baseScale * mIntensity
+          translateY = cos(motionElapsedSec * 41.0f) * 2.1f * baseScale * mIntensity
+          extraRotationDeg = sin(motionElapsedSec * 29.0f) * 1.6f * mIntensity
+        }
+        LayerMotionEffect.TYPEWRITER -> {
+          alpha = 1f
+        }
       }
     }
 
@@ -300,9 +398,11 @@ class KineticCompositionRenderer(private val context: Context) {
       }
     }
 
-    // Subtle organic floating breath so text never looks dead/pinned
-    val breathT = ((positionMs - active.startMs).coerceAtLeast(0L) / 1000f)
-    translateY += sin(breathT * 3.1f) * (1.2f * baseScale)
+    // Subtle organic floating breath only when no explicit loop/reveal motion overrides it
+    if (!hasDedicatedMotion) {
+      val breathT = ((positionMs - active.startMs).coerceAtLeast(0L) / 1000f)
+      translateY += sin(breathT * 3.1f) * (1.2f * baseScale)
+    }
 
     if (exitProgress > 0f) {
       val easedExit = applyEasing(exitProgress, AnimationEasingType.DECELERATE)
@@ -337,11 +437,14 @@ class KineticCompositionRenderer(private val context: Context) {
       )
 
     canvas.save()
-    canvas.translate(elementCenterX, elementCenterY + translateY)
-    if (el.rotationDeg != 0f) {
-      canvas.rotate(el.rotationDeg)
+    canvas.translate(elementCenterX + translateX, elementCenterY + translateY)
+    val totalRot = el.rotationDeg + extraRotationDeg
+    if (totalRot != 0f) {
+      canvas.rotate(totalRot)
     }
-    canvas.scale(scale, scale)
+    if (scale != 1f) {
+      canvas.scale(scale, scale)
+    }
 
     // Optional Highlight Pill / Background Box behind text block
     val bgPaint = measured.backgroundPaint
@@ -350,22 +453,36 @@ class KineticCompositionRenderer(private val context: Context) {
       val padY = 6f * baseScale
       val cornerR = el.backgroundCornerRadiusDp.coerceIn(0f, 32f) * baseScale
       bgPaint.alpha = (baseAlphaByte * el.backgroundAlpha.coerceIn(0.1f, 1f)).toInt().coerceIn(0, 255)
-      val bgRect =
-        RectF(
-          -measured.blockWidthPx / 2f - padX,
-          -measured.blockHeightPx / 2f - padY,
-          measured.blockWidthPx / 2f + padX,
-          measured.blockHeightPx / 2f + padY,
-        )
-      canvas.drawRoundRect(bgRect, cornerR, cornerR, bgPaint)
+      tempBgRect.set(
+        -measured.blockWidthPx / 2f - padX,
+        -measured.blockHeightPx / 2f - padY,
+        measured.blockWidthPx / 2f + padX,
+        measured.blockHeightPx / 2f + padY,
+      )
+      canvas.drawRoundRect(tempBgRect, cornerR, cornerR, bgPaint)
     }
 
+    val isTypewriter = el.motionEffect == LayerMotionEffect.TYPEWRITER
+    val isWave = el.motionEffect == LayerMotionEffect.WAVE
+    val totalChars = if (isTypewriter) measured.lines.sumOf { it.text.length }.coerceAtLeast(1) else 0
+    val revealedChars =
+      if (isTypewriter) {
+        val revealDurMs = (compDuration * 0.62f / mSpeed).coerceIn(300f, 2400f)
+        val frac = (rawElapsedFromBeat.coerceAtLeast(0f) / revealDurMs).coerceIn(0f, 1f)
+        (frac * totalChars).toInt().coerceIn(0, totalChars)
+      } else {
+        Int.MAX_VALUE
+      }
+    var charCursor = 0
+
     val canDoWordReveal =
-      el.hierarchyLevel != HierarchyLevel.DOMINANT &&
+      !isTypewriter &&
+        el.hierarchyLevel != HierarchyLevel.DOMINANT &&
         el.wordIndices.size > 1 &&
         active.wordMappings.isNotEmpty()
 
     var localY = -measured.blockHeightPx / 2f
+    var waveWordSeq = 0
     for (line in measured.lines) {
       val baselineY = localY - line.ascentPx
       val lineStartX =
@@ -375,7 +492,40 @@ class KineticCompositionRenderer(private val context: Context) {
           TextAlignment.CENTER -> -line.widthPx / 2f
         }
 
-      if (canDoWordReveal && line.words.size > 1) {
+      if (isTypewriter) {
+        val remainingChars = (revealedChars - charCursor).coerceIn(0, line.text.length)
+        charCursor += line.text.length
+        if (remainingChars > 0) {
+          val slice = if (remainingChars >= line.text.length) line.text else line.text.substring(0, remainingChars)
+          drawTextToken(
+            canvas = canvas,
+            text = slice,
+            x = lineStartX,
+            y = baselineY,
+            paint = measured.paint,
+            glowPaint = measured.glowPaint,
+            strokePaint = measured.strokePaint,
+            glowIntensity = el.glowIntensity,
+            alphaByte = baseAlphaByte,
+          )
+        }
+      } else if (isWave && line.words.isNotEmpty()) {
+        for (wSpan in line.words) {
+          val waveOffsetY = sin(motionElapsedSec * 5.8f - waveWordSeq * 0.9f) * 7.5f * baseScale * mIntensity
+          waveWordSeq++
+          drawTextToken(
+            canvas = canvas,
+            text = wSpan.text,
+            x = lineStartX + wSpan.startXInLine,
+            y = baselineY + waveOffsetY,
+            paint = measured.paint,
+            glowPaint = measured.glowPaint,
+            strokePaint = measured.strokePaint,
+            glowIntensity = el.glowIntensity,
+            alphaByte = baseAlphaByte,
+          )
+        }
+      } else if (canDoWordReveal && line.words.size > 1) {
         for (wSpan in line.words) {
           val wt = wSpan.wordIndexInComp?.let { active.wordMappings.getOrNull(it) }
           val wAlphaRatio =
@@ -447,8 +597,19 @@ class KineticCompositionRenderer(private val context: Context) {
     canvasHeight: Int,
     shadowMultiplier: Float,
   ): CachedLayout {
+    // O(1) identity fast-path: eliminates per-frame StringBuilder allocations during 60fps playback
+    val fast = lastFastEntry
+    if (fast != null &&
+      fast.comp === comp &&
+      fast.width == canvasWidth &&
+      fast.height == canvasHeight &&
+      fast.shadowMultiplier == shadowMultiplier
+    ) {
+      return fast.layout
+    }
+
     val sig =
-      buildString {
+      buildString(256) {
         append(comp.id).append('|')
         append(canvasWidth).append('x').append(canvasHeight).append('|')
         append(comp.anchorXFraction).append(',').append(comp.anchorYFraction).append('|')
@@ -468,7 +629,10 @@ class KineticCompositionRenderer(private val context: Context) {
           append(':').append(el.depthLayer).append(';')
         }
       }
-    layoutCache[sig]?.let { return it }
+    layoutCache[sig]?.let { cached ->
+      lastFastEntry = FastCacheEntry(comp, canvasWidth, canvasHeight, shadowMultiplier, cached)
+      return cached
+    }
 
     if (layoutCache.size > 48) {
       layoutCache.clear()
@@ -678,6 +842,7 @@ class KineticCompositionRenderer(private val context: Context) {
         anchorY = comp.anchorYFraction * canvasHeight,
       )
     layoutCache[sig] = computed
+    lastFastEntry = FastCacheEntry(comp, canvasWidth, canvasHeight, shadowMultiplier, computed)
     return computed
   }
 

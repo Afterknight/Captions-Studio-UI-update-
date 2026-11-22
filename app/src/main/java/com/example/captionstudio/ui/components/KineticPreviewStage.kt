@@ -1,5 +1,7 @@
 package com.example.captionstudio.ui.components
 
+import android.app.ActivityManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.LayoutInflater
@@ -117,11 +119,28 @@ fun KineticPreviewStage(
   val renderer = remember(context) { KineticCompositionRenderer(context) }
   val preset = remember(presetId) { PresetCatalog.findById(presetId) }
 
+  val isLowRamDevice =
+    remember(context) {
+      (context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
+    }
+  val effectivePerformanceMode = previewQuality == PreviewQualityMode.PERFORMANCE || isLowRamDevice
+
+  // Local 60fps draw-phase clock isolates high-frequency Canvas invalidation from EditorScreen recompositions
+  var localPlayheadMs by remember { mutableLongStateOf(playheadMs) }
+  LaunchedEffect(playheadMs, isPlaying) {
+    if (!isPlaying) {
+      localPlayheadMs = playheadMs
+    } else if (abs(localPlayheadMs - playheadMs) > 220L) {
+      localPlayheadMs = playheadMs
+    }
+  }
+
   val latestPlayhead by rememberUpdatedState(playheadMs)
   val latestCompositions by rememberUpdatedState(compositions)
   val latestSelectedId by rememberUpdatedState(selectedCompositionId)
   val latestIsPlaying by rememberUpdatedState(isPlaying)
   val latestOnPlayingChanged by rememberUpdatedState(onPlayingChanged)
+  val latestOnPlayheadUpdate by rememberUpdatedState(onPlayheadUpdate)
 
   var isBuffering by remember(videoUriString) { mutableStateOf(false) }
   var playerError by remember(videoUriString) { mutableStateOf<String?>(null) }
@@ -214,38 +233,51 @@ fun KineticPreviewStage(
     }
   }
 
-  // Smooth 60Hz frame ticker during playback
-  LaunchedEffect(exoPlayer, isPlaying, durationMs, playbackSpeed) {
+  // Smooth 60Hz local Canvas ticker with throttled parent scrubber sync (~13Hz) to eliminate full-screen recomposition jank
+  LaunchedEffect(exoPlayer, isPlaying, durationMs, playbackSpeed, effectivePerformanceMode) {
     if (!isPlaying) return@LaunchedEffect
     var lastFrameMs = -1L
-    val stepDelayMs = if (previewQuality == PreviewQualityMode.PERFORMANCE) 33L else 0L
-    var lastUpdateMs = 0L
+    val canvasStepMs = if (effectivePerformanceMode) 28L else 0L
+    val parentSyncIntervalMs = if (effectivePerformanceMode) 110L else 75L
+    var lastCanvasTickMs = 0L
+    var lastParentSyncMs = 0L
 
     while (isPlaying) {
       withFrameMillis { frameMs ->
         if (exoPlayer != null) {
-          if (frameMs - lastUpdateMs >= stepDelayMs) {
-            lastUpdateMs = frameMs
+          if (frameMs - lastCanvasTickMs >= canvasStepMs) {
+            lastCanvasTickMs = frameMs
             val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
-            onPlayheadUpdate(pos)
+            localPlayheadMs = pos
+            if (frameMs - lastParentSyncMs >= parentSyncIntervalMs) {
+              lastParentSyncMs = frameMs
+              latestOnPlayheadUpdate(pos)
+            }
           }
         } else {
           if (lastFrameMs >= 0L) {
             val delta = ((frameMs - lastFrameMs).coerceIn(0L, 100L) * playbackSpeed).toLong()
             val total = durationMs.coerceAtLeast(4000L)
-            val next = (latestPlayhead + delta) % total
-            onPlayheadUpdate(next)
+            val next = (localPlayheadMs + delta) % total
+            localPlayheadMs = next
+            if (frameMs - lastParentSyncMs >= parentSyncIntervalMs) {
+              lastParentSyncMs = frameMs
+              latestOnPlayheadUpdate(next)
+            }
           }
           lastFrameMs = frameMs
         }
       }
     }
+    // Sync final exact playhead immediately upon pause
+    latestOnPlayheadUpdate(localPlayheadMs)
   }
 
   val ratio = aspectRatio.ratioWidth / aspectRatio.ratioHeight
   var dragAnchorX by remember { mutableStateOf(0.5f) }
   var dragAnchorY by remember { mutableStateOf(0.7f) }
   val playerViewRef = remember(videoUriString) { mutableStateOf<PlayerView?>(null) }
+  val cachedTextureViewRef = remember(videoUriString) { mutableStateOf<TextureView?>(null) }
   var activeSubjectMask by remember(videoUriString) { mutableStateOf<Bitmap?>(null) }
 
   val activeComp =
@@ -254,7 +286,7 @@ fun KineticPreviewStage(
         ?: compositions.firstOrNull { it.id == selectedCompositionId }
     }
   val needsSubjectMask = hasVideo && activeComp?.hasBehindSubjectElements() == true
-  val maskCadenceMs = if (previewQuality == PreviewQualityMode.PERFORMANCE) 100L else 50L
+  val maskCadenceMs = if (effectivePerformanceMode) 110L else 55L
   val maskBucket = playheadMs / maskCadenceMs
 
   // Lazily run downscaled on-device ML Kit segmentation ONLY when an active behind-subject caption is visible
@@ -265,14 +297,16 @@ fun KineticPreviewStage(
     }
     SubjectMaskProcessor.getCachedMask(videoUriString, playheadMs)?.let { cached ->
       activeSubjectMask = cached
-      if (maskBucket % 2L != 0L && previewQuality == PreviewQualityMode.PERFORMANCE) {
+      if (maskBucket % 2L != 0L && effectivePerformanceMode) {
         return@LaunchedEffect
       }
     }
-    val texView = playerViewRef.value?.let { findTextureView(it) }
+    val texView =
+      cachedTextureViewRef.value
+        ?: playerViewRef.value?.let { pv -> findTextureView(pv).also { cachedTextureViewRef.value = it } }
     if (texView != null && texView.isAvailable && texView.width > 0 && texView.height > 0) {
-      val sampleW = 192
-      val sampleH = ((sampleW / ratio).toInt()).coerceIn(96, 340)
+      val sampleW = if (effectivePerformanceMode) 144 else 192
+      val sampleH = ((sampleW / ratio).toInt()).coerceIn(96, 320)
       val snap = runCatching { texView.getBitmap(sampleW, sampleH) }.getOrNull()
       if (snap != null) {
         val computed =
@@ -305,11 +339,15 @@ fun KineticPreviewStage(
             .apply {
               player = exoPlayer
               playerViewRef.value = this
+              cachedTextureViewRef.value = findTextureView(this)
             }
         },
         update = { view ->
           if (view.player !== exoPlayer) view.player = exoPlayer
           playerViewRef.value = view
+          if (cachedTextureViewRef.value == null) {
+            cachedTextureViewRef.value = findTextureView(view)
+          }
         },
         modifier = Modifier.fillMaxSize(),
       )
@@ -385,7 +423,8 @@ fun KineticPreviewStage(
       }
 
       val shadowFactor =
-        if (previewQuality == PreviewQualityMode.PERFORMANCE) 0.5f else preset.shadowRadiusFactor
+        if (effectivePerformanceMode) 0.55f else preset.shadowRadiusFactor
+      val drawPositionMs = localPlayheadMs
 
       drawIntoCanvas { canvas ->
         renderer.drawWithSubjectMask(
@@ -393,9 +432,9 @@ fun KineticPreviewStage(
           canvasWidth = size.width.toInt(),
           canvasHeight = size.height.toInt(),
           compositions = latestCompositions,
-          positionMs = latestPlayhead,
+          positionMs = drawPositionMs,
           subjectMaskBitmap = if (needsSubjectMask) activeSubjectMask else null,
-          wrapInOffscreenLayer = true,
+          wrapInOffscreenLayer = needsSubjectMask,
           shadowMultiplier = shadowFactor,
           selectedCompositionId = latestSelectedId,
           drawSelectionGuide = !isPlaying,

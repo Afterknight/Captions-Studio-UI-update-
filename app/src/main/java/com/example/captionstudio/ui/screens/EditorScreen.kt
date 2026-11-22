@@ -658,6 +658,7 @@ fun EditorScreen(
                   },
                   onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
                   onOpenTypographyStudio = onOpenTypography,
+                  onOpenAnimationStudio = onOpenAnimation,
                   onOpenPresets = onOpenPresets,
                 )
 

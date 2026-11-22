@@ -40,41 +40,29 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionProject
-import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.FontRole
-import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.typography.FontRegistry
 import com.example.captionstudio.ui.components.ActiveLayerSelectorBar
 import com.example.captionstudio.ui.components.HorizontalFontSelectorStrip
+import com.example.captionstudio.ui.components.LiveStylePreviewCard
 import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.StudioMinimalTopBar
 import com.example.captionstudio.ui.components.StudioSubtlePill
 import com.example.captionstudio.ui.components.TypographyInspectorDeck
-import com.example.captionstudio.ui.components.parseComposeHexColor
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCoral
@@ -118,6 +106,7 @@ fun TypographyScreen(
       ?: activeComp?.elements?.firstOrNull()
 
   var scope by remember { mutableStateOf(ApplyScope.SINGLE_ELEMENT) }
+  var previewReplayNonce by remember { mutableIntStateOf(0) }
   var searchQuery by remember { mutableStateOf("") }
   var roleFilter by remember { mutableStateOf<FontRole?>(null) }
   var customFontInput by remember { mutableStateOf("") }
@@ -189,9 +178,10 @@ fun TypographyScreen(
                   onResetStyle = { onResetElementStyle(activeComp.id, activeEl.id) },
                 )
 
-                LiveElementPreviewBanner(
-                  element = activeEl,
-                  fontsVersion = fontsVersion,
+                LiveStylePreviewCard(
+                  activeComp = activeComp,
+                  activeEl = activeEl,
+                  replayTrigger = previewReplayNonce,
                 )
 
                 Text(
@@ -221,12 +211,12 @@ fun TypographyScreen(
             }
           }
 
-          // 2. Full Organized Typography Inspector (`Text | Color | Effects | Layout`)
+          // 2. Full Organized Typography Inspector (`Text | Color | Motion | Effects | Layout`)
           item {
             StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
               Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                  text = "Customize Typography",
+                  text = "Customize Typography & Motion",
                   style = MaterialTheme.typography.titleSmall,
                   color = StudioTextPrimary,
                 )
@@ -244,6 +234,8 @@ fun TypographyScreen(
                       { onDeleteElement(activeComp.id, activeEl.id) }
                     } else null,
                   onToggleCaptionDepthMask = { onToggleDepthMask(activeComp.id) },
+                  showInlinePreview = false,
+                  onExternalReplayTrigger = { previewReplayNonce++ },
                 )
               }
             }
@@ -395,107 +387,6 @@ fun TypographyScreen(
           }
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun LiveElementPreviewBanner(
-  element: CompositionElement,
-  fontsVersion: Int,
-) {
-  val previewFont = remember(element.fontFamilyId, fontsVersion) { FontRegistry.findById(element.fontFamilyId) }
-  val fillColor = remember(element.colorHex) { parseComposeHexColor(element.colorHex) }
-  val bgColor = remember(element.backgroundColorHex) { element.backgroundColorHex?.let { parseComposeHexColor(it) } }
-  val strokeColor = remember(element.strokeColorHex) { parseComposeHexColor(element.strokeColorHex) }
-  val shadowColor =
-    remember(element.shadowColorHex, element.glowColorHex, element.shadowEnabled) {
-      val hex = element.glowColorHex ?: if (element.shadowEnabled) element.shadowColorHex else null
-      hex?.let { parseComposeHexColor(it) }
-    }
-
-  val displayText = if (element.uppercase) element.text.uppercase() else element.text
-  val mappedWeight = FontWeight(element.fontWeight.coerceIn(100, 900))
-  val mappedAlign =
-    when (element.alignment) {
-      TextAlignment.LEFT -> TextAlign.Start
-      TextAlignment.RIGHT -> TextAlign.End
-      TextAlignment.CENTER -> TextAlign.Center
-    }
-  val previewSp = element.fontSizeSp.coerceIn(16f, 44f).sp
-  val decoration = if (element.isUnderlined) TextDecoration.Underline else TextDecoration.None
-  val composeShadow =
-    when {
-      !element.glowColorHex.isNullOrBlank() && shadowColor != null ->
-        Shadow(
-          color = shadowColor.copy(alpha = 0.85f),
-          offset = Offset.Zero,
-          blurRadius = (18f * element.glowIntensity).coerceIn(4f, 36f),
-        )
-      element.shadowEnabled && shadowColor != null ->
-        Shadow(
-          color = shadowColor.copy(alpha = 0.72f),
-          offset = Offset(0f, 4f),
-          blurRadius = (12f * element.shadowIntensity).coerceIn(2f, 28f),
-        )
-      else -> null
-    }
-
-  Box(
-    modifier =
-      Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(16.dp))
-        .background(StudioObsidian)
-        .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
-        .padding(vertical = 26.dp, horizontal = 16.dp),
-    contentAlignment = Alignment.Center,
-  ) {
-    Box(
-      modifier =
-        Modifier.rotate(element.rotationDeg)
-          .alpha(element.opacity.coerceIn(0.15f, 1f))
-          .let { base ->
-            if (bgColor != null) {
-              base
-                .clip(RoundedCornerShape(element.backgroundCornerRadiusDp.dp))
-                .background(bgColor.copy(alpha = element.backgroundAlpha.coerceIn(0.15f, 1f)))
-                .padding(horizontal = 14.dp, vertical = 7.dp)
-            } else base
-          },
-      contentAlignment = Alignment.Center,
-    ) {
-      if (element.strokeWidthFactor > 0.05f) {
-        Text(
-          text = displayText,
-          textAlign = mappedAlign,
-          style =
-            TextStyle(
-              fontFamily = previewFont.composeFontFamily,
-              fontSize = previewSp,
-              fontWeight = mappedWeight,
-              fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
-              letterSpacing = (element.letterSpacingEm * 16f).sp,
-              textDecoration = decoration,
-              color = strokeColor,
-              drawStyle = Stroke(width = (element.strokeWidthFactor * 2.2f).coerceIn(1f, 16f)),
-            ),
-        )
-      }
-      Text(
-        text = displayText,
-        textAlign = mappedAlign,
-        style =
-          TextStyle(
-            fontFamily = previewFont.composeFontFamily,
-            fontSize = previewSp,
-            fontWeight = mappedWeight,
-            fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
-            letterSpacing = (element.letterSpacingEm * 16f).sp,
-            textDecoration = decoration,
-            color = fillColor,
-            shadow = composeShadow,
-          ),
-      )
     }
   }
 }

@@ -1,7 +1,9 @@
 package com.example.captionstudio.domain.model
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
+@Immutable
 data class ColorSwatchOption(
   val hex: String,
   val label: String,
@@ -52,6 +54,50 @@ object StudioPalette {
       ColorSwatchOption(VIOLET, "Violet"),
       ColorSwatchOption(CYAN, "Cyan"),
       ColorSwatchOption(MINT, "Mint"),
+    )
+
+  /**
+   * 24-color designer palette grid organized into 4 balanced rows (6 per row) for instant
+   * brand matching: Neutrals, Warm Cinema, Vivid Creator, and Cool Electric.
+   */
+  val brandPaletteGrid: List<List<ColorSwatchOption>> =
+    listOf(
+      // Row 1: Studio Neutrals & Editorial Creams
+      listOf(
+        ColorSwatchOption("#FFFFFF", "Pure White"),
+        ColorSwatchOption("#F5F5F7", "Soft Ivory"),
+        ColorSwatchOption("#FFF3D6", "Warm Cream"),
+        ColorSwatchOption("#A1A1AA", "Silver Slate"),
+        ColorSwatchOption("#27272E", "Graphite"),
+        ColorSwatchOption("#000000", "Pure Black"),
+      ),
+      // Row 2: Warm Coral, Golds & Cinema Reds
+      listOf(
+        ColorSwatchOption("#FFE066", "Sunbeam"),
+        ColorSwatchOption("#FFB81C", "Studio Gold"),
+        ColorSwatchOption("#FF8C42", "Tangerine"),
+        ColorSwatchOption("#EE7E70", "Studio Coral"),
+        ColorSwatchOption("#FF2E2E", "Cinema Red"),
+        ColorSwatchOption("#B5174E", "Deep Berry"),
+      ),
+      // Row 3: Vivid Creator Pops & Pastels
+      listOf(
+        ColorSwatchOption("#FF5CA8", "Hot Pink"),
+        ColorSwatchOption("#FF99C8", "Blush Rose"),
+        ColorSwatchOption("#D946EF", "Electric Orchid"),
+        ColorSwatchOption("#A87BFF", "Soft Violet"),
+        ColorSwatchOption("#6366F1", "Indigo Glow"),
+        ColorSwatchOption("#3B82F6", "Cobalt Blue"),
+      ),
+      // Row 4: Cool Cyans, Mint & Emerald
+      listOf(
+        ColorSwatchOption("#4CC9F0", "Sky Cyan"),
+        ColorSwatchOption("#22D3EE", "Ice Aqua"),
+        ColorSwatchOption("#14B8A6", "Deep Teal"),
+        ColorSwatchOption("#3AE8B0", "Neon Mint"),
+        ColorSwatchOption("#84CC16", "Electric Lime"),
+        ColorSwatchOption("#22C55E", "Fresh Emerald"),
+      ),
     )
 }
 
@@ -168,6 +214,34 @@ enum class AnimationEasingType(val label: String) {
   LINEAR("Linear"),
 }
 
+/**
+ * Predefined per-layer kinetic motion effects applicable directly from the typography
+ * customization menu and rendered identically in Live Preview and Media3 MP4 export.
+ */
+@Serializable
+enum class LayerMotionEffect(
+  val label: String,
+  val category: String,
+  val summary: String,
+) {
+  NONE("None", "Basic", "Follows caption timing cleanly"),
+  FADE_IN("Fade In", "Entry", "Velvety opacity dissolve in"),
+  SLIDE_UP("Slide Up", "Entry", "Crisp upward glide into place"),
+  SLIDE_DOWN("Slide Down", "Entry", "Smooth drop-in from above"),
+  SLIDE_LEFT("Slide In", "Entry", "Dynamic horizontal glide in"),
+  POP_IN("Pop In", "Entry", "Punchy spring overshoot pop"),
+  ZOOM_IN("Zoom In", "Entry", "Cinematic zoom-up reveal"),
+  BOUNCE("Bounce", "Dynamic", "Elastic bouncy landing & hop"),
+  WIGGLE("Wiggle", "Loop", "Playful rhythmic tilt wiggle"),
+  PULSE("Pulse", "Loop", "Alive breathing scale beat"),
+  FLOAT("Float", "Loop", "Weightless hovering drift"),
+  WAVE("Wave", "Loop", "Smooth per-word ocean wave"),
+  SWING("Swing", "Loop", "Gentle pendulum sway tilt"),
+  SHAKE("Jitter", "Dynamic", "High-energy hype micro-shake"),
+  TYPEWRITER("Typewriter", "Reveal", "Character-by-character typing"),
+}
+
+@Immutable
 @Serializable
 data class WordTiming(
   val word: String,
@@ -177,6 +251,7 @@ data class WordTiming(
   val emphasisScore: Float = 0f,
 )
 
+@Immutable
 @Serializable
 data class CompositionElement(
   val id: String,
@@ -211,12 +286,16 @@ data class CompositionElement(
   val lineHeightMultiplier: Float = 1.05f,
   val isUnderlined: Boolean = false,
   val glowIntensity: Float = 1.0f,
+  val motionEffect: LayerMotionEffect = LayerMotionEffect.NONE,
+  val motionSpeed: Float = 1.0f,
+  val motionIntensity: Float = 1.0f,
 )
 
 /**
  * Surgical patch model for updating any combination of kinetic typography layer attributes
  * cleanly without long parameter lists.
  */
+@Immutable
 data class ElementStylePatch(
   val fontFamilyId: String? = null,
   val fontWeight: Int? = null,
@@ -246,8 +325,12 @@ data class ElementStylePatch(
   val backgroundCornerRadiusDp: Float? = null,
   val depthLayer: DepthLayer? = null,
   val safeRegion: SafeRegion? = null,
+  val motionEffect: LayerMotionEffect? = null,
+  val motionSpeed: Float? = null,
+  val motionIntensity: Float? = null,
 )
 
+@Immutable
 @Serializable
 data class CaptionComposition(
   val id: String,
@@ -275,6 +358,7 @@ data class CaptionComposition(
   }
 }
 
+@Immutable
 @Serializable
 data class NormalizedRect(
   val left: Float,
@@ -283,6 +367,7 @@ data class NormalizedRect(
   val bottom: Float,
 )
 
+@Immutable
 @Serializable
 data class VideoMetadata(
   val durationMs: Long = 0L,
@@ -299,6 +384,7 @@ data class VideoMetadata(
     get() = if (rotationDegrees == 90 || rotationDegrees == 270) width else height
 }
 
+@Immutable
 @Serializable
 data class VideoAnalysisReport(
   val frameCountSampled: Int = 0,
@@ -319,6 +405,7 @@ data class VideoAnalysisReport(
   val isSplitScreenDetected: Boolean = false,
 )
 
+@Immutable
 @Serializable
 data class ExportPreferences(
   val aspectRatio: AspectRatioOption = AspectRatioOption.PORTRAIT_9_16,
@@ -327,6 +414,7 @@ data class ExportPreferences(
   val qualityMode: ExportQualityMode = ExportQualityMode.BALANCED,
 )
 
+@Immutable
 @Serializable
 data class AnimationDefaults(
   val entryAnimation: EntryAnimationType = EntryAnimationType.SCALE_RISE,
@@ -336,6 +424,7 @@ data class AnimationDefaults(
   val exitDurationMs: Int = 130,
 )
 
+@Immutable
 @Serializable
 data class FontRoleOverrides(
   val heavyFontId: String? = null,
@@ -343,6 +432,7 @@ data class FontRoleOverrides(
   val expressiveFontId: String? = null,
 )
 
+@Immutable
 data class PresetDefinition(
   val id: String,
   val name: String,
@@ -367,6 +457,7 @@ data class PresetDefinition(
   val sampleSentence: String,
 )
 
+@Immutable
 data class CaptionProject(
   val id: String,
   val title: String,

@@ -168,6 +168,8 @@ object CompositionValidator {
         backgroundColorHex = el.backgroundColorHex?.takeIf { it.isNotBlank() }?.let { normalizeHex(it) },
         backgroundAlpha = el.backgroundAlpha.coerceIn(0.1f, 1.0f),
         backgroundCornerRadiusDp = el.backgroundCornerRadiusDp.coerceIn(0f, 32f),
+        motionSpeed = el.motionSpeed.coerceIn(0.4f, 2.2f),
+        motionIntensity = el.motionIntensity.coerceIn(0.25f, 2.0f),
       )
     }
   }

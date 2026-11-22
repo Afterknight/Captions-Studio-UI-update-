@@ -585,6 +585,7 @@ internal fun ThemeWorkspacePanel(
   onResetElementStyle: (String) -> Unit,
   onToggleDepthMask: () -> Unit,
   onOpenTypographyStudio: () -> Unit,
+  onOpenAnimationStudio: () -> Unit,
   onOpenPresets: () -> Unit,
 ) {
   if (activeComp == null) {
@@ -596,7 +597,7 @@ internal fun ThemeWorkspacePanel(
       ) {
         Text("No caption selected", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
         Text(
-          "Generate or select a caption to customize colors, outlines, shadows, glow, spacing, and depth.",
+          "Generate or select a caption to customize colors, motion effects, outlines, shadows, glow, and depth.",
           style = MaterialTheme.typography.bodySmall,
           color = StudioTextSecondary,
         )
@@ -632,6 +633,8 @@ internal fun ThemeWorkspacePanel(
                 { onDeleteElement(activeEl.id) }
               } else null,
             onToggleCaptionDepthMask = onToggleDepthMask,
+            onOpenAnimationStudio = onOpenAnimationStudio,
+            showInlinePreview = true,
           )
         }
 

@@ -51,6 +51,18 @@
     <string name="typo_increase_cd">Increase %1$s</string>
     <string name="typo_tab_text">Text</string>
     <string name="typo_tab_color">Color</string>
+    <string name="typo_tab_motion">Motion</string>
     <string name="typo_tab_effects">Effects</string>
     <string name="typo_tab_layout">Layout</string>
+    <string name="color_picker_wheel_tab">Color Wheel</string>
+    <string name="color_picker_palette_tab">Palette Grid</string>
+    <string name="color_picker_hex_label">Custom Hex</string>
+    <string name="color_picker_brightness_label">Brightness</string>
+    <string name="preview_live_title">Live Preview</string>
+    <string name="preview_replay_cd">Replay motion preview</string>
+    <string name="preview_play_cd">Play motion preview</string>
+    <string name="preview_pause_cd">Pause motion preview</string>
+    <string name="preview_toggle_visibility_cd">Toggle live preview</string>
+    <string name="motion_speed_label">Motion Speed</string>
+    <string name="motion_intensity_label">Motion Intensity</string>
 </resources>

@@ -302,4 +302,34 @@ class CaptionStudioEngineTest {
     val unchanged = VoskVideoTranscriptionService.normalizeQuietPcmIfNeeded(loudPcm, 0, loudPcm.size)
     assertEquals(18000.toShort(), unchanged[0])
   }
+
+  @Test
+  fun `validator clamps layer motion speed and intensity while preserving motion effect`() {
+    val comp =
+      CaptionComposition(
+        id = "c_motion",
+        startMs = 0L,
+        endMs = 2000L,
+        originalText = "Bounce",
+        elements =
+          listOf(
+            CompositionElement(
+              id = "e_motion",
+              text = "Bounce",
+              role = FontRole.HEAVY,
+              hierarchyLevel = HierarchyLevel.DOMINANT,
+              fontFamilyId = "anton",
+              fontSizeSp = 40f,
+              motionEffect = com.example.captionstudio.domain.model.LayerMotionEffect.BOUNCE,
+              motionSpeed = 9.5f,
+              motionIntensity = 0.01f,
+            )
+          ),
+      )
+    val fixed = CompositionValidator.validateAndRepair(null, listOf(comp))
+    val el = fixed.first().elements.first()
+    assertEquals(com.example.captionstudio.domain.model.LayerMotionEffect.BOUNCE, el.motionEffect)
+    assertEquals(2.2f, el.motionSpeed, 0.001f)
+    assertEquals(0.25f, el.motionIntensity, 0.001f)
+  }
 }

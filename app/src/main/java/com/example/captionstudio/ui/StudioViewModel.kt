@@ -27,6 +27,7 @@ import com.example.captionstudio.domain.model.FontRoleOverrides
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.ProjectSortOption
 import com.example.captionstudio.domain.model.SafeRegion
@@ -1161,6 +1162,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                   backgroundCornerRadiusDp =
                     (patch.backgroundCornerRadiusDp ?: el.backgroundCornerRadiusDp).coerceIn(0f, 32f),
                   depthLayer = patch.depthLayer ?: el.depthLayer,
+                  motionEffect = patch.motionEffect ?: el.motionEffect,
+                  motionSpeed = (patch.motionSpeed ?: el.motionSpeed).coerceIn(0.4f, 2.2f),
+                  motionIntensity = (patch.motionIntensity ?: el.motionIntensity).coerceIn(0.25f, 2.0f),
                 )
               }
             }
@@ -1256,6 +1260,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     backgroundAlpha = 0.72f,
                     backgroundCornerRadiusDp = 10f,
                     depthLayer = DepthLayer.IN_FRONT,
+                    motionEffect = LayerMotionEffect.NONE,
+                    motionSpeed = 1.0f,
+                    motionIntensity = 1.0f,
                   )
                 }
               }

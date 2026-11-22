@@ -85,6 +85,60 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `all 15 layer motion effects render cleanly across timestamps with fast-path cache`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val renderer = KineticCompositionRenderer(context)
+    val bmp = android.graphics.Bitmap.createBitmap(540, 960, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+
+    val allEffects = com.example.captionstudio.domain.model.LayerMotionEffect.entries
+    assertEquals(15, allEffects.size)
+
+    allEffects.forEach { effect ->
+      val comp =
+        com.example.captionstudio.domain.model.CaptionComposition(
+          id = "motion_${effect.name}",
+          startMs = 0L,
+          endMs = 2400L,
+          originalText = "Kinetic Motion Wave",
+          elements =
+            listOf(
+              com.example.captionstudio.domain.model.CompositionElement(
+                id = "el_${effect.name}",
+                text = "Kinetic Motion Wave",
+                role = com.example.captionstudio.domain.model.FontRole.HEAVY,
+                hierarchyLevel = com.example.captionstudio.domain.model.HierarchyLevel.DOMINANT,
+                fontFamilyId = "montserrat",
+                fontSizeSp = 36f,
+                colorHex = com.example.captionstudio.domain.model.StudioPalette.CORAL,
+                motionEffect = effect,
+                motionSpeed = 1.4f,
+                motionIntensity = 1.3f,
+              )
+            ),
+        )
+      val comps = listOf(comp)
+      // Render multiple frames sequentially to exercise both cold layout and O(1) fast-path cache
+      for (ts in listOf(0L, 120L, 480L, 1200L, 2320L)) {
+        renderer.drawAtTime(canvas, 540, 960, comps, ts)
+      }
+    }
+    bmp.recycle()
+  }
+
+  @Test
+  fun `color picker hex normalization and HSV round-trip accurately`() {
+    assertEquals("#EE7E70", com.example.captionstudio.ui.components.normalizeHexInput("ee7e70"))
+    assertEquals("#FFFFFF", com.example.captionstudio.ui.components.normalizeHexInput("#ffffff"))
+    assertEquals(null, com.example.captionstudio.ui.components.normalizeHexInput("#12345"))
+    assertEquals(null, com.example.captionstudio.ui.components.normalizeHexInput("ZZZZZZ"))
+
+    val hsv = com.example.captionstudio.ui.components.hexToHsvSafe("#EE7E70")
+    val roundTrip = com.example.captionstudio.ui.components.hsvToHex(hsv[0], hsv[1], hsv[2])
+    assertEquals("#EE7E70", roundTrip)
+  }
+
+  @Test
   fun `renderer draws validated composition without error`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val renderer = KineticCompositionRenderer(context)

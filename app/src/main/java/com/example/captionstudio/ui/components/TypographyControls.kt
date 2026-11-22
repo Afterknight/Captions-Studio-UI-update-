@@ -1,10 +1,5 @@
 package com.example.captionstudio.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material3.FilterChip
@@ -39,8 +33,6 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -49,17 +41,14 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -80,7 +69,6 @@ import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.typography.FontRegistry
 import com.example.captionstudio.typography.StudioFontDescriptor
-import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioCoralContainer
@@ -91,7 +79,6 @@ import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
-import kotlin.math.roundToInt
 
 /**
  * Compact header letting users pick which kinetic typography layer (word/phrase) in the active
@@ -606,8 +593,8 @@ fun AccessibleSliderControl(
 }
 
 /**
- * Horizontal scrolling swatch bar with accessible labels, checkmark selection state, and a
- * clean collapsible custom HSV + Hex color picker so any color is reachable without clutter.
+ * Horizontal scrolling swatch bar backed by [StudioColorSwatchSelector] (circular color wheel,
+ * brand palette grid, and custom hex input).
  */
 @Composable
 fun AccessibleColorSwatchRow(
@@ -618,15 +605,17 @@ fun AccessibleColorSwatchRow(
   allowCustomPicker: Boolean = true,
   swatchTagPrefix: String = "swatch",
 ) {
-  var showCustomPicker by remember { mutableStateOf(false) }
-  val isPresetSwatch = remember(selectedHex, swatches) { swatches.any { it.hex.equals(selectedHex, true) } }
-
-  Column(
-    modifier = modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
-  ) {
+  if (allowCustomPicker) {
+    StudioColorSwatchSelector(
+      selectedHex = selectedHex,
+      swatches = swatches,
+      onColorChange = { hex, _ -> onSelectColor(hex) },
+      modifier = modifier,
+      swatchTagPrefix = swatchTagPrefix,
+    )
+  } else {
     Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -646,10 +635,7 @@ fun AccessibleColorSwatchRow(
                 color = if (isSelected) StudioCoral else StudioHairlineStrong,
                 shape = CircleShape,
               )
-              .clickable(
-                role = Role.RadioButton,
-                onClick = { onSelectColor(swatch.hex) },
-              )
+              .clickable(role = Role.RadioButton) { onSelectColor(swatch.hex) }
               .semantics {
                 selected = isSelected
                 contentDescription = "${swatch.label} color" + if (isSelected) ", selected" else ""
@@ -667,206 +653,6 @@ fun AccessibleColorSwatchRow(
           }
         }
       }
-
-      if (allowCustomPicker) {
-        val customRing =
-          Brush.sweepGradient(
-            listOf(
-              Color(0xFFFF453A),
-              Color(0xFFFFD60A),
-              Color(0xFF32D74B),
-              Color(0xFF64D2FF),
-              Color(0xFFBF5AF2),
-              Color(0xFFFF453A),
-            )
-          )
-        val customActive = showCustomPicker || !isPresetSwatch
-        Box(
-          modifier =
-            Modifier.minimumInteractiveComponentSize()
-              .size(38.dp)
-              .clip(CircleShape)
-              .background(if (!isPresetSwatch) parseComposeHexColor(selectedHex) else StudioElevated)
-              .border(
-                width = if (customActive) 2.5.dp else 1.8.dp,
-                brush = customRing,
-                shape = CircleShape,
-              )
-              .clickable(
-                role = Role.Button,
-                onClick = { showCustomPicker = !showCustomPicker },
-              )
-              .semantics {
-                contentDescription = "Custom color picker"
-                stateDescription = if (showCustomPicker) "Expanded" else "Collapsed"
-              }
-              .testTag("${swatchTagPrefix}_custom_picker"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Rounded.Palette,
-            contentDescription = stringResource(R.string.typo_custom_color_cd),
-            tint =
-              if (!isPresetSwatch && parseComposeHexColor(selectedHex).luminance() > 0.55f)
-                StudioObsidian
-              else Color.White,
-            modifier = Modifier.size(18.dp),
-          )
-        }
-      }
-    }
-
-    AnimatedVisibility(
-      visible = showCustomPicker && allowCustomPicker,
-      enter = expandVertically() + fadeIn(),
-      exit = shrinkVertically() + fadeOut(),
-    ) {
-      InlineCustomColorPicker(
-        currentHex = selectedHex,
-        onColorPicked = onSelectColor,
-      )
-    }
-  }
-}
-
-@Composable
-private fun InlineCustomColorPicker(
-  currentHex: String,
-  onColorPicked: (String) -> Unit,
-) {
-  val hsvInit = remember(currentHex) { hexToHsv(currentHex) }
-  var hue by remember(currentHex) { mutableFloatStateOf(hsvInit[0]) }
-  var saturation by remember(currentHex) { mutableFloatStateOf(hsvInit[1]) }
-  var brightness by remember(currentHex) { mutableFloatStateOf(hsvInit[2]) }
-  var hexDraft by remember(currentHex) { mutableStateOf(currentHex.uppercase()) }
-
-  val emitFromHsv = { h: Float, s: Float, v: Float ->
-    val argb = android.graphics.Color.HSVToColor(floatArrayOf(h, s, v))
-    val formatted = String.format("#%06X", 0xFFFFFF and argb)
-    hexDraft = formatted
-    onColorPicked(formatted)
-  }
-
-  Column(
-    modifier =
-      Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(16.dp))
-        .background(StudioObsidian)
-        .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
-        .padding(12.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    // Rainbow Hue strip preview bar
-    Box(
-      modifier =
-        Modifier.fillMaxWidth()
-          .height(10.dp)
-          .clip(CircleShape)
-          .background(
-            Brush.horizontalGradient(
-              listOf(
-                Color(0xFFFF0000),
-                Color(0xFFFFFF00),
-                Color(0xFF00FF00),
-                Color(0xFF00FFFF),
-                Color(0xFF0000FF),
-                Color(0xFFFF00FF),
-                Color(0xFFFF0000),
-              )
-            )
-          )
-    )
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Text("Hue", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary, modifier = Modifier.width(42.dp))
-      Slider(
-        value = hue,
-        onValueChange = {
-          hue = it
-          emitFromHsv(hue, saturation, brightness)
-        },
-        valueRange = 0f..360f,
-        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = StudioCoral),
-        modifier = Modifier.weight(1f),
-      )
-      Text("${hue.roundToInt()}°", style = MaterialTheme.typography.labelSmall, color = StudioCoralLight, modifier = Modifier.width(34.dp))
-    }
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Text("Vivid", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary, modifier = Modifier.width(42.dp))
-      Slider(
-        value = saturation,
-        onValueChange = {
-          saturation = it
-          emitFromHsv(hue, saturation, brightness)
-        },
-        valueRange = 0f..1f,
-        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = StudioCoral),
-        modifier = Modifier.weight(1f),
-      )
-      Text("${(saturation * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall, color = StudioCoralLight, modifier = Modifier.width(34.dp))
-    }
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Text("Light", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary, modifier = Modifier.width(42.dp))
-      Slider(
-        value = brightness,
-        onValueChange = {
-          brightness = it
-          emitFromHsv(hue, saturation, brightness)
-        },
-        valueRange = 0.05f..1f,
-        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = StudioCoral),
-        modifier = Modifier.weight(1f),
-      )
-      Text("${(brightness * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall, color = StudioCoralLight, modifier = Modifier.width(34.dp))
-    }
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Box(
-        modifier =
-          Modifier.size(34.dp)
-            .clip(CircleShape)
-            .background(parseComposeHexColor(currentHex))
-            .border(1.dp, StudioHairlineStrong, CircleShape)
-      )
-      OutlinedTextField(
-        value = hexDraft,
-        onValueChange = { input ->
-          val cleaned = input.uppercase().take(7)
-          hexDraft = cleaned
-          if (Regex("^#[0-9A-F]{6}$").matches(cleaned)) {
-            onColorPicked(cleaned)
-          }
-        },
-        label = { Text("Hex") },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = StudioCoral,
-            unfocusedBorderColor = StudioBorder,
-            focusedLabelColor = StudioCoral,
-            cursorColor = StudioCoral,
-          ),
-        modifier = Modifier.weight(1f),
-      )
     }
   }
 }
@@ -877,16 +663,4 @@ fun parseComposeHexColor(hex: String): Color {
   } catch (_: Exception) {
     Color.White
   }
-}
-
-private fun hexToHsv(hex: String): FloatArray {
-  val hsv = FloatArray(3)
-  val argb =
-    try {
-      android.graphics.Color.parseColor(hex)
-    } catch (_: Exception) {
-      android.graphics.Color.WHITE
-    }
-  android.graphics.Color.colorToHSV(argb, hsv)
-  return hsv
 }

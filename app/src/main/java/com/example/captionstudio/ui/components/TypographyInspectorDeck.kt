@@ -30,11 +30,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatAlignLeft
 import androidx.compose.material.icons.automirrored.rounded.FormatAlignRight
+import androidx.compose.material.icons.rounded.Animation
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FormatAlignCenter
 import androidx.compose.material.icons.rounded.FormatItalic
 import androidx.compose.material.icons.rounded.FormatUnderlined
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -74,11 +79,11 @@ import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.ElementStylePatch
+import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.ui.theme.StudioBorder
-import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioCoralContainer
 import com.example.ui.theme.StudioCoralLight
@@ -92,9 +97,17 @@ import com.example.ui.theme.StudioTextSecondary
 import java.util.Locale
 import kotlin.math.roundToInt
 
+private data class InspectorTabSpec(
+  val label: String,
+  val icon: ImageVector,
+  val tag: String,
+  val hasActiveDot: Boolean = false,
+)
+
 /**
- * Organized 4-section typography style inspector (`Text | Color | Effects | Layout`) so every
- * visual property of a kinetic typography layer is editable and accessible without screen clutter.
+ * Organized 5-section typography customization deck (`Text | Color | Motion | Effects | Layout`)
+ * with an embedded real-time [LiveStylePreviewCard] so every color wheel pick, font adjustment,
+ * outline, shadow, glow, and motion preset is instantly visible and easy to navigate.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -105,64 +118,119 @@ fun TypographyInspectorDeck(
   onUpdateText: (String) -> Unit,
   onDeleteElement: (() -> Unit)? = null,
   onToggleCaptionDepthMask: () -> Unit,
+  onOpenAnimationStudio: (() -> Unit)? = null,
+  showInlinePreview: Boolean = true,
+  onExternalReplayTrigger: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   var selectedSection by remember { mutableIntStateOf(0) }
+  var previewReplayNonce by remember { mutableIntStateOf(0) }
+
+  val hasEffectsActive =
+    activeEl.strokeWidthFactor > 0.05f || !activeEl.glowColorHex.isNullOrBlank() || activeEl.shadowEnabled
+  val hasMotionActive = activeEl.motionEffect != LayerMotionEffect.NONE
+
   val tabs =
     listOf(
-      stringResource(R.string.typo_tab_text),
-      stringResource(R.string.typo_tab_color),
-      stringResource(R.string.typo_tab_effects),
-      stringResource(R.string.typo_tab_layout),
+      InspectorTabSpec(stringResource(R.string.typo_tab_text), Icons.Rounded.TextFields, "text"),
+      InspectorTabSpec(stringResource(R.string.typo_tab_color), Icons.Rounded.Palette, "color"),
+      InspectorTabSpec(
+        stringResource(R.string.typo_tab_motion),
+        Icons.Rounded.Animation,
+        "motion",
+        hasActiveDot = hasMotionActive,
+      ),
+      InspectorTabSpec(
+        stringResource(R.string.typo_tab_effects),
+        Icons.Rounded.AutoFixHigh,
+        "effects",
+        hasActiveDot = hasEffectsActive,
+      ),
+      InspectorTabSpec(stringResource(R.string.typo_tab_layout), Icons.Rounded.Tune, "layout"),
     )
 
   Column(
     modifier = modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    // Sleek 4-pill Apple-style Segmented Control
+    // Interactive WYSIWYG Live Preview showing every style & motion change immediately
+    if (showInlinePreview) {
+      LiveStylePreviewCard(
+        activeComp = activeComp,
+        activeEl = activeEl,
+        replayTrigger = previewReplayNonce,
+      )
+    }
+
+    // Clear 5-tab Icon + Label Navigation Bar for effortless customization discovery
     Row(
       modifier =
         Modifier.fillMaxWidth()
-          .clip(CircleShape)
+          .clip(RoundedCornerShape(16.dp))
           .background(StudioObsidian)
-          .border(1.dp, StudioHairline, CircleShape)
-          .padding(3.dp),
+          .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
+          .padding(4.dp),
       horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-      tabs.forEachIndexed { idx, label ->
+      tabs.forEachIndexed { idx, spec ->
         val isSelected = selectedSection == idx
         Box(
           modifier =
             Modifier.weight(1f)
               .minimumInteractiveComponentSize()
-              .clip(CircleShape)
+              .clip(RoundedCornerShape(12.dp))
               .background(if (isSelected) StudioElevated else Color.Transparent)
               .border(
                 width = if (isSelected) 1.dp else 0.dp,
-                color = if (isSelected) StudioHairlineStrong else Color.Transparent,
-                shape = CircleShape,
+                color = if (isSelected) StudioCoral.copy(alpha = 0.55f) else Color.Transparent,
+                shape = RoundedCornerShape(12.dp),
               )
               .clickable(role = Role.Tab) { selectedSection = idx }
-              .semantics { selected = isSelected }
-              .padding(vertical = 8.dp)
-              .testTag("typo_inspector_tab_${label.lowercase()}"),
+              .semantics {
+                selected = isSelected
+                contentDescription = "${spec.label} customization tab" + if (isSelected) ", selected" else ""
+              }
+              .padding(vertical = 7.dp, horizontal = 2.dp)
+              .testTag("typo_inspector_tab_${spec.tag}"),
           contentAlignment = Alignment.Center,
         ) {
-          Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isSelected) StudioCoralLight else StudioTextSecondary,
-            maxLines = 1,
-          )
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+          ) {
+            Box {
+              Icon(
+                imageVector = spec.icon,
+                contentDescription = null,
+                tint = if (isSelected) StudioCoralLight else StudioTextSecondary,
+                modifier = Modifier.size(17.dp),
+              )
+              if (spec.hasActiveDot && !isSelected) {
+                Box(
+                  modifier =
+                    Modifier.align(Alignment.TopEnd)
+                      .size(5.dp)
+                      .clip(CircleShape)
+                      .background(StudioCoral)
+                )
+              }
+            }
+            Text(
+              text = spec.label,
+              style = MaterialTheme.typography.labelSmall,
+              fontSize = 10.sp,
+              fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+              color = if (isSelected) StudioCoralLight else StudioTextSecondary,
+              maxLines = 1,
+            )
+          }
         }
       }
     }
 
     AnimatedContent(
       targetState = selectedSection,
-      transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
+      transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(110)) },
       label = "typography_inspector_section",
     ) { tabIdx ->
       when (tabIdx) {
@@ -180,6 +248,16 @@ fun TypographyInspectorDeck(
             onPatchStyle = onPatchStyle,
           )
         2 ->
+          MotionEffectsPanel(
+            activeEl = activeEl,
+            onPatchStyle = onPatchStyle,
+            onTriggerPreviewReplay = {
+              previewReplayNonce++
+              onExternalReplayTrigger?.invoke()
+            },
+            onOpenAnimationStudio = onOpenAnimationStudio,
+          )
+        3 ->
           TypographyEffectsTab(
             activeEl = activeEl,
             onPatchStyle = onPatchStyle,
@@ -214,7 +292,7 @@ private fun TypographyTextTab(
     )
 
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    // Layer text input + Update + optional Delete
+    // Layer text input + Save + optional Delete
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -353,7 +431,6 @@ private fun TypographyTextTab(
       }
     }
 
-    // Size, Tracking, Line Height, Opacity Sliders with Accessible Steppers
     AccessibleSliderControl(
       label = "Font Size",
       valueText = "${activeEl.fontSizeSp.roundToInt()} sp",
@@ -412,17 +489,32 @@ private fun TypographyColorTab(
   val hasBackground = !activeEl.backgroundColorHex.isNullOrBlank()
 
   Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    // Full-Spectrum Color Wheel + 24-Color Brand Palette Grid + Custom Hex Input
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Text("Text Fill Color", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-      AccessibleColorSwatchRow(
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text("Text Fill Color", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
+        Text(
+          text = activeEl.colorHex.uppercase(),
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.SemiBold,
+          color = StudioCoralLight,
+        )
+      }
+      FullSpectrumColorStudio(
         selectedHex = activeEl.colorHex,
-        swatches = StudioPalette.textSwatches,
-        onSelectColor = { hex -> onPatchStyle(ElementStylePatch(colorHex = hex), true) },
-        swatchTagPrefix = "text_color",
+        onColorChange = { hex, commit ->
+          onPatchStyle(ElementStylePatch(colorHex = hex), commit)
+        },
+        initialMode = 0,
+        tagPrefix = "text_color",
       )
     }
 
-    // Highlight Background Pill Card
+    // Highlight Background Pill Card (also supports full color wheel & palette grid)
     Column(
       modifier =
         Modifier.fillMaxWidth()
@@ -440,7 +532,7 @@ private fun TypographyColorTab(
         Column(modifier = Modifier.weight(1f)) {
           Text("Highlight Background Pill", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
           Text(
-            "Add a solid or translucent backdrop behind this text layer",
+            "Add a solid or translucent backdrop behind this layer",
             style = MaterialTheme.typography.bodySmall,
             color = StudioTextSecondary,
           )
@@ -470,10 +562,12 @@ private fun TypographyColorTab(
         exit = shrinkVertically() + fadeOut(),
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-          AccessibleColorSwatchRow(
+          StudioColorSwatchSelector(
             selectedHex = activeEl.backgroundColorHex ?: StudioPalette.SHADOW,
             swatches = StudioPalette.effectSwatches,
-            onSelectColor = { hex -> onPatchStyle(ElementStylePatch(backgroundColorHex = hex), true) },
+            onColorChange = { hex, commit ->
+              onPatchStyle(ElementStylePatch(backgroundColorHex = hex), commit)
+            },
             swatchTagPrefix = "bg_pill_color",
           )
           AccessibleSliderControl(
@@ -541,10 +635,12 @@ private fun TypographyEffectsTab(
         testTagPrefix = "stroke_width",
       )
       Text("Outline Color", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
-      AccessibleColorSwatchRow(
+      StudioColorSwatchSelector(
         selectedHex = activeEl.strokeColorHex,
         swatches = StudioPalette.effectSwatches,
-        onSelectColor = { hex -> onPatchStyle(ElementStylePatch(strokeColorHex = hex), true) },
+        onColorChange = { hex, commit ->
+          onPatchStyle(ElementStylePatch(strokeColorHex = hex), commit)
+        },
         swatchTagPrefix = "stroke_color",
       )
     }
@@ -572,10 +668,12 @@ private fun TypographyEffectsTab(
         testTagPrefix = "shadow_intensity",
       )
       Text("Shadow Color", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
-      AccessibleColorSwatchRow(
+      StudioColorSwatchSelector(
         selectedHex = activeEl.shadowColorHex,
         swatches = StudioPalette.effectSwatches,
-        onSelectColor = { hex -> onPatchStyle(ElementStylePatch(shadowColorHex = hex), true) },
+        onColorChange = { hex, commit ->
+          onPatchStyle(ElementStylePatch(shadowColorHex = hex), commit)
+        },
         swatchTagPrefix = "shadow_color",
       )
     }
@@ -590,7 +688,10 @@ private fun TypographyEffectsTab(
         if (enabled) {
           onPatchStyle(
             ElementStylePatch(
-              glowColorHex = activeEl.glowColorHex ?: activeEl.colorHex.takeIf { it != StudioPalette.SHADOW } ?: StudioPalette.YELLOW,
+              glowColorHex =
+                activeEl.glowColorHex
+                  ?: activeEl.colorHex.takeIf { it != StudioPalette.SHADOW }
+                  ?: StudioPalette.YELLOW,
             ),
             true,
           )
@@ -612,10 +713,12 @@ private fun TypographyEffectsTab(
         testTagPrefix = "glow_intensity",
       )
       Text("Glow Color", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
-      AccessibleColorSwatchRow(
+      StudioColorSwatchSelector(
         selectedHex = activeEl.glowColorHex ?: StudioPalette.YELLOW,
         swatches = StudioPalette.textSwatches,
-        onSelectColor = { hex -> onPatchStyle(ElementStylePatch(glowColorHex = hex), true) },
+        onColorChange = { hex, commit ->
+          onPatchStyle(ElementStylePatch(glowColorHex = hex), commit)
+        },
         swatchTagPrefix = "glow_color",
       )
     }
@@ -639,7 +742,6 @@ private fun TypographyLayoutTab(
     )
 
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    // Placement Regions
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Text("Caption Safe Region", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
       FlowRow(
@@ -665,7 +767,6 @@ private fun TypographyLayoutTab(
       }
     }
 
-    // Fine Transform: Tilt, Horizontal & Vertical Nudge
     AccessibleSliderControl(
       label = "Tilt / Rotation",
       valueText = "${activeEl.rotationDeg.roundToInt()}°",
@@ -722,7 +823,6 @@ private fun TypographyLayoutTab(
       }
     }
 
-    // Per-Layer Depth Order (In Front vs Behind Subject)
     Column(
       modifier =
         Modifier.fillMaxWidth()

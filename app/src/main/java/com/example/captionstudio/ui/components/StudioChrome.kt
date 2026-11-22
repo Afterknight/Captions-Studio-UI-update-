@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -132,9 +133,9 @@ fun StudioBrandMark(modifier: Modifier = Modifier, size: Dp = 40.dp) {
         size = Size(radius * 2f, radius * 2f),
         style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
       )
-      // Right C arc (opening right)
+      // Right C arc (opening right) in signature Studio Coral matching the launcher logo
       drawArc(
-        color = StudioTextPrimary,
+        color = StudioCoral,
         startAngle = 42f,
         sweepAngle = 276f,
         useCenter = false,
@@ -148,63 +149,62 @@ fun StudioBrandMark(modifier: Modifier = Modifier, size: Dp = 40.dp) {
 
 /**
  * Subtle warm atmospheric glow arc drawn behind the Home screen hero, evoking luxury glass optics.
+ * Uses drawWithCache so gradient shaders are allocated once per size change for smooth scrolling.
  */
 @Composable
 fun StudioAmbientBackdrop(modifier: Modifier = Modifier) {
-  Canvas(modifier = modifier.fillMaxSize()) {
-    // Sweeping soft coral-terracotta glow on the right mid-section
-    drawCircle(
-      brush =
-        Brush.radialGradient(
-          colors =
-            listOf(
-              StudioCoralGlow.copy(alpha = 0.30f),
-              StudioCoralGlow.copy(alpha = 0.11f),
-              Color.Transparent,
-            ),
-          center = Offset(size.width * 0.96f, size.height * 0.44f),
-          radius = size.width * 0.78f,
-        ),
-      radius = size.width * 0.78f,
-      center = Offset(size.width * 0.96f, size.height * 0.44f),
-    )
-
-    // Delicate luminous curved rim arc sweeping across the right flank
-    val arcRadius = size.width * 0.62f
-    drawCircle(
-      brush =
-        Brush.sweepGradient(
-          colors =
-            listOf(
-              Color.Transparent,
-              StudioCoral.copy(alpha = 0.04f),
-              StudioCoral.copy(alpha = 0.24f),
-              StudioCoralLight.copy(alpha = 0.10f),
-              Color.Transparent,
-            ),
-          center = Offset(size.width * 1.04f, size.height * 0.56f),
-        ),
-      radius = arcRadius,
-      center = Offset(size.width * 1.04f, size.height * 0.56f),
-      style = Stroke(width = 1.5.dp.toPx()),
-    )
-
-    // Soft warm floor bounce glow near bottom edge
-    drawCircle(
-      brush =
-        Brush.radialGradient(
-          colors =
-            listOf(
-              StudioCoralGlow.copy(alpha = 0.22f),
-              Color.Transparent,
-            ),
-          center = Offset(size.width * 0.72f, size.height * 1.02f),
-          radius = size.width * 0.75f,
-        ),
-      radius = size.width * 0.75f,
-      center = Offset(size.width * 0.72f, size.height * 1.02f),
-    )
-  }
+  Box(
+    modifier =
+      modifier
+        .fillMaxSize()
+        .drawWithCache {
+          val rightCenter = Offset(size.width * 0.96f, size.height * 0.44f)
+          val rightRadius = size.width * 0.78f
+          val rightGlow =
+            Brush.radialGradient(
+              colors =
+                listOf(
+                  StudioCoralGlow.copy(alpha = 0.30f),
+                  StudioCoralGlow.copy(alpha = 0.11f),
+                  Color.Transparent,
+                ),
+              center = rightCenter,
+              radius = rightRadius.coerceAtLeast(1f),
+            )
+          val rimCenter = Offset(size.width * 1.04f, size.height * 0.56f)
+          val arcRadius = size.width * 0.62f
+          val rimSweep =
+            Brush.sweepGradient(
+              colors =
+                listOf(
+                  Color.Transparent,
+                  StudioCoral.copy(alpha = 0.04f),
+                  StudioCoral.copy(alpha = 0.24f),
+                  StudioCoralLight.copy(alpha = 0.10f),
+                  Color.Transparent,
+                ),
+              center = rimCenter,
+            )
+          val rimStroke = Stroke(width = 1.5.dp.toPx())
+          val floorCenter = Offset(size.width * 0.72f, size.height * 1.02f)
+          val floorRadius = size.width * 0.75f
+          val floorGlow =
+            Brush.radialGradient(
+              colors =
+                listOf(
+                  StudioCoralGlow.copy(alpha = 0.22f),
+                  Color.Transparent,
+                ),
+              center = floorCenter,
+              radius = floorRadius.coerceAtLeast(1f),
+            )
+          onDrawBehind {
+            drawCircle(brush = rightGlow, radius = rightRadius, center = rightCenter)
+            drawCircle(brush = rimSweep, radius = arcRadius, center = rimCenter, style = rimStroke)
+            drawCircle(brush = floorGlow, radius = floorRadius, center = floorCenter)
+          }
+        }
+  )
 }
 
 /**
@@ -276,10 +276,12 @@ fun StudioCoralPillButton(
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val gradient =
-    if (enabled) {
-      Brush.horizontalGradient(listOf(StudioCoralLight, StudioCoral, StudioCoralDeep))
-    } else {
-      Brush.horizontalGradient(listOf(StudioElevated, StudioElevated))
+    remember(enabled) {
+      if (enabled) {
+        Brush.horizontalGradient(listOf(StudioCoralLight, StudioCoral, StudioCoralDeep))
+      } else {
+        Brush.horizontalGradient(listOf(StudioElevated, StudioElevated))
+      }
     }
 
   Box(
