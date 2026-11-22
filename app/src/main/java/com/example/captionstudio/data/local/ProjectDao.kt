@@ -11,6 +11,9 @@ interface ProjectDao {
   @Query("SELECT * FROM projects ORDER BY updatedAtMs DESC")
   fun observeAllProjects(): Flow<List<ProjectEntity>>
 
+  @Query("SELECT * FROM projects ORDER BY createdAtMs DESC")
+  suspend fun getAllProjectsSnapshot(): List<ProjectEntity>
+
   @Query("SELECT * FROM projects WHERE id = :projectId")
   fun observeProjectById(projectId: String): Flow<ProjectEntity?>
 

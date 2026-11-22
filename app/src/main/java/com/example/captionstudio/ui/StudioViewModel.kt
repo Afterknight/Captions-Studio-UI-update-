@@ -27,6 +27,7 @@ import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.PreviewQualityMode
+import com.example.captionstudio.domain.model.ProjectSortOption
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
@@ -50,13 +51,17 @@ import com.example.captionstudio.media.VoskVideoTranscriptionService
 import com.example.captionstudio.presets.PresetCatalog
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.typography.FontRegistry
+import com.example.captionstudio.ui.components.clearVideoThumbnailCache
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -88,8 +93,54 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     FontRegistry.loadCachedCustomFonts(application)
   }
 
+  private val _gallerySearchQuery = MutableStateFlow("")
+  val gallerySearchQuery: StateFlow<String> = _gallerySearchQuery.asStateFlow()
+
+  private val _gallerySortOption = MutableStateFlow(ProjectSortOption.DATE_CREATED)
+  val gallerySortOption: StateFlow<ProjectSortOption> = _gallerySortOption.asStateFlow()
+
+  private val _isRefreshingProjects = MutableStateFlow(false)
+  val isRefreshingProjects: StateFlow<Boolean> = _isRefreshingProjects.asStateFlow()
+
+  private val _thumbnailRefreshNonce = MutableStateFlow(0)
+  val thumbnailRefreshNonce: StateFlow<Int> = _thumbnailRefreshNonce.asStateFlow()
+
+  private val _refreshedSnapshotOverride = MutableStateFlow<List<CaptionProject>?>(null)
+
   val projects: StateFlow<List<CaptionProject>> =
-    projectRepo.allProjects.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    combine(projectRepo.allProjects, _refreshedSnapshotOverride) { live, snapshot ->
+        if (live.isNotEmpty() || snapshot == null) live else snapshot
+      }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+  val filteredGalleryProjects: StateFlow<List<CaptionProject>> =
+    combine(projects, _gallerySearchQuery, _gallerySortOption) { all, query, sortOption ->
+        val trimmed = query.trim()
+        val matched =
+          if (trimmed.isEmpty()) {
+            all
+          } else {
+            all.filter { it.title.contains(trimmed, ignoreCase = true) }
+          }
+        when (sortOption) {
+          ProjectSortOption.DATE_CREATED ->
+            matched.sortedWith(
+              compareByDescending<CaptionProject> { it.createdAtMs }
+                .thenByDescending { it.updatedAtMs }
+            )
+          ProjectSortOption.NAME ->
+            matched.sortedWith(
+              compareBy<CaptionProject> { it.title.lowercase(Locale.getDefault()) }
+                .thenByDescending { it.createdAtMs }
+            )
+          ProjectSortOption.DURATION ->
+            matched.sortedWith(
+              compareByDescending<CaptionProject> { it.metadata.durationMs }
+                .thenByDescending { it.createdAtMs }
+            )
+        }
+      }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
   val geminiSettings: StateFlow<GeminiSettings> =
     settingsRepo.geminiSettings.stateIn(
@@ -169,7 +220,63 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _showSafeGuides.value = !_showSafeGuides.value
   }
 
+  fun updateGallerySearchQuery(query: String) {
+    _gallerySearchQuery.value = query
+  }
+
+  fun updateGallerySortOption(option: ProjectSortOption) {
+    _gallerySortOption.value = option
+  }
+
+  fun refreshProjects() {
+    if (_isRefreshingProjects.value) return
+    viewModelScope.launch {
+      _isRefreshingProjects.value = true
+      val startedAt = System.currentTimeMillis()
+      try {
+        val ctx = getApplication<Application>()
+        val latestSnapshot = projectRepo.getAllProjectsSnapshot()
+        latestSnapshot.forEach { proj ->
+          if (proj.videoUriString.isNotBlank() && proj.metadata.durationMs <= 0L) {
+            runCatching {
+              val refreshedMeta =
+                VideoAnalysisService.extractMetadata(ctx, Uri.parse(proj.videoUriString))
+              if (refreshedMeta.durationMs > 0L) {
+                projectRepo.saveProject(proj.copy(metadata = refreshedMeta))
+              }
+            }
+          }
+        }
+        val synced = projectRepo.getAllProjectsSnapshot()
+        _refreshedSnapshotOverride.value = synced
+        clearVideoThumbnailCache()
+        _thumbnailRefreshNonce.value += 1
+        refreshVoicePackStatuses()
+        val elapsed = System.currentTimeMillis() - startedAt
+        if (elapsed < 380L) {
+          delay(380L - elapsed)
+        }
+      } finally {
+        _isRefreshingProjects.value = false
+      }
+    }
+  }
+
   fun openProject(projectId: String) {
+    val cached = projects.value.firstOrNull { it.id == projectId }
+    if (cached != null) {
+      _activeProject.value = cached
+      _transcribedSegments.value =
+        if (cached.wordTimings.isNotEmpty()) {
+          VoskVideoTranscriptionService.segmentRecognizedWords(cached.wordTimings)
+        } else {
+          emptyList()
+        }
+      _playheadMs.value = 0L
+      val firstComp = cached.compositions.firstOrNull()
+      _selectedCompositionId.value = firstComp?.id
+      _selectedElementId.value = firstComp?.elements?.firstOrNull()?.id
+    }
     viewModelScope.launch {
       val loaded = projectRepo.getProject(projectId)
       undoStack.clear()

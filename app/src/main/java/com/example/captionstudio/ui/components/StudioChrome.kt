@@ -432,7 +432,7 @@ fun StudioGlassCard(
  */
 private object VideoThumbnailCache {
   private val cache =
-    object : LruCache<String, Bitmap>(16) {
+    object : LruCache<String, Bitmap>(24) {
       override fun sizeOf(key: String, value: Bitmap): Int = 1
     }
 
@@ -441,6 +441,15 @@ private object VideoThumbnailCache {
   fun put(uri: String, bitmap: Bitmap) {
     cache.put(uri, bitmap)
   }
+
+  fun clear() {
+    cache.evictAll()
+  }
+}
+
+/** Clears cached video frame thumbnails so a pull-to-refresh re-decodes fresh previews. */
+fun clearVideoThumbnailCache() {
+  VideoThumbnailCache.clear()
 }
 
 /**
@@ -452,16 +461,21 @@ fun ProjectVideoThumbnail(
   videoUriString: String,
   modifier: Modifier = Modifier,
   cornerRadius: Dp = 12.dp,
+  refreshKey: Int = 0,
 ) {
   val context = LocalContext.current
   val bitmap by
-    produceState<Bitmap?>(initialValue = VideoThumbnailCache.get(videoUriString), key1 = videoUriString) {
+    produceState<Bitmap?>(
+      initialValue = VideoThumbnailCache.get(videoUriString),
+      key1 = videoUriString,
+      key2 = refreshKey,
+    ) {
       if (videoUriString.isBlank()) {
         value = null
         return@produceState
       }
       val existing = VideoThumbnailCache.get(videoUriString)
-      if (existing != null) {
+      if (existing != null && !existing.isRecycled) {
         value = existing
         return@produceState
       }
@@ -474,7 +488,7 @@ fun ProjectVideoThumbnail(
               retriever.getFrameAtTime(500_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 ?: retriever.frameAtTime
             raw?.let { frame ->
-              val maxDim = 240
+              val maxDim = 480
               val scale = minOf(maxDim.toFloat() / frame.width, maxDim.toFloat() / frame.height, 1f)
               if (scale < 1f) {
                 val scaled =

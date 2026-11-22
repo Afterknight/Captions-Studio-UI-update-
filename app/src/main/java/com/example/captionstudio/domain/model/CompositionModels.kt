@@ -301,3 +301,9 @@ enum class ApplyScope(val label: String) {
   SINGLE_COMPOSITION("This Composition"),
   ALL_COMPOSITIONS("All Compositions"),
 }
+
+enum class ProjectSortOption(val label: String) {
+  DATE_CREATED("Date Created"),
+  NAME("Name"),
+  DURATION("Duration"),
+}

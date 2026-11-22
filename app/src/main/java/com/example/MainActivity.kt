@@ -5,16 +5,37 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -25,11 +46,16 @@ import com.example.captionstudio.ui.screens.AiSettingsScreen
 import com.example.captionstudio.ui.screens.AnimationScreen
 import com.example.captionstudio.ui.screens.EditorScreen
 import com.example.captionstudio.ui.screens.ExportScreen
-import com.example.captionstudio.ui.screens.HomeScreen
 import com.example.captionstudio.ui.screens.PresetsScreen
+import com.example.captionstudio.ui.screens.ProjectGalleryScreen
 import com.example.captionstudio.ui.screens.TypographyScreen
 import com.example.ui.theme.CaptionStudioTheme
+import com.example.ui.theme.StudioCoral
+import com.example.ui.theme.StudioObsidian
+import com.example.ui.theme.StudioTextSecondary
 import kotlinx.serialization.Serializable
+
+private val StudioEmphasizedEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 @Serializable object HomeRoute
 
@@ -50,6 +76,11 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
   val navController = rememberNavController()
 
   val projects by studioViewModel.projects.collectAsStateWithLifecycle()
+  val filteredGalleryProjects by studioViewModel.filteredGalleryProjects.collectAsStateWithLifecycle()
+  val gallerySearchQuery by studioViewModel.gallerySearchQuery.collectAsStateWithLifecycle()
+  val gallerySortOption by studioViewModel.gallerySortOption.collectAsStateWithLifecycle()
+  val isRefreshingProjects by studioViewModel.isRefreshingProjects.collectAsStateWithLifecycle()
+  val thumbnailRefreshNonce by studioViewModel.thumbnailRefreshNonce.collectAsStateWithLifecycle()
   val activeProject by studioViewModel.activeProject.collectAsStateWithLifecycle()
   val selectedCompId by studioViewModel.selectedCompositionId.collectAsStateWithLifecycle()
   val selectedElId by studioViewModel.selectedElementId.collectAsStateWithLifecycle()
@@ -70,7 +101,7 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
 
-  val navAnimDuration = 280
+  val navAnimDuration = 300
 
   NavHost(
     navController = navController,
@@ -78,37 +109,74 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
     enterTransition = {
       slideIntoContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Left,
-        animationSpec = tween(navAnimDuration, easing = FastOutSlowInEasing),
-        initialOffset = { it / 4 },
+        animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+        initialOffset = { it / 6 },
       ) + fadeIn(tween(navAnimDuration, easing = FastOutSlowInEasing))
     },
     exitTransition = {
       slideOutOfContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Left,
-        animationSpec = tween(navAnimDuration, easing = FastOutSlowInEasing),
-        targetOffset = { it / 6 },
+        animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+        targetOffset = { it / 8 },
       ) + fadeOut(tween(200))
     },
     popEnterTransition = {
       slideIntoContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Right,
-        animationSpec = tween(navAnimDuration, easing = FastOutSlowInEasing),
-        initialOffset = { it / 6 },
+        animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+        initialOffset = { it / 8 },
       ) + fadeIn(tween(navAnimDuration, easing = FastOutSlowInEasing))
     },
     popExitTransition = {
       slideOutOfContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Right,
-        animationSpec = tween(navAnimDuration, easing = FastOutSlowInEasing),
-        targetOffset = { it / 4 },
+        animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+        targetOffset = { it / 6 },
       ) + fadeOut(tween(200))
     },
   ) {
-    composable<HomeRoute> {
-      HomeScreen(
-        projects = projects,
+    composable<HomeRoute>(
+      exitTransition = {
+        if (targetState.destination.hasRoute<EditorRoute>()) {
+          scaleOut(
+            targetScale = 0.94f,
+            animationSpec = tween(320, easing = StudioEmphasizedEasing),
+          ) + fadeOut(tween(220, easing = FastOutSlowInEasing))
+        } else {
+          slideOutOfContainer(
+            towards = AnimatedContentTransitionScope.SlideDirection.Left,
+            animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+            targetOffset = { it / 8 },
+          ) + fadeOut(tween(200))
+        }
+      },
+      popEnterTransition = {
+        if (initialState.destination.hasRoute<EditorRoute>()) {
+          scaleIn(
+            initialScale = 0.94f,
+            animationSpec = tween(340, easing = StudioEmphasizedEasing),
+          ) + fadeIn(tween(280, easing = FastOutSlowInEasing))
+        } else {
+          slideIntoContainer(
+            towards = AnimatedContentTransitionScope.SlideDirection.Right,
+            animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+            initialOffset = { it / 8 },
+          ) + fadeIn(tween(navAnimDuration, easing = FastOutSlowInEasing))
+        }
+      },
+    ) {
+      ProjectGalleryScreen(
+        projects = filteredGalleryProjects,
+        totalProjectCount = projects.size,
+        searchQuery = gallerySearchQuery,
+        sortOption = gallerySortOption,
+        isRefreshing = isRefreshingProjects,
+        thumbnailRefreshKey = thumbnailRefreshNonce,
         geminiSettings = geminiSettings,
         isBusy = isBusy,
+        onSearchQueryChange = studioViewModel::updateGallerySearchQuery,
+        onSortOptionChange = studioViewModel::updateGallerySortOption,
+        onRefreshProjects = studioViewModel::refreshProjects,
         onOpenProject = { id ->
           studioViewModel.openProject(id)
           navController.navigate(EditorRoute(id))
@@ -123,78 +191,132 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
       )
     }
 
-    composable<EditorRoute> { backStackEntry ->
+    composable<EditorRoute>(
+      enterTransition = {
+        if (initialState.destination.hasRoute<HomeRoute>()) {
+          scaleIn(
+            initialScale = 1.035f,
+            animationSpec = tween(360, easing = StudioEmphasizedEasing),
+          ) +
+            slideInVertically(
+              initialOffsetY = { it / 28 },
+              animationSpec = tween(360, easing = StudioEmphasizedEasing),
+            ) +
+            fadeIn(tween(260, easing = FastOutSlowInEasing))
+        } else {
+          slideIntoContainer(
+            towards = AnimatedContentTransitionScope.SlideDirection.Left,
+            animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+            initialOffset = { it / 6 },
+          ) + fadeIn(tween(navAnimDuration, easing = FastOutSlowInEasing))
+        }
+      },
+      popExitTransition = {
+        if (targetState.destination.hasRoute<HomeRoute>()) {
+          scaleOut(
+            targetScale = 0.96f,
+            animationSpec = tween(280, easing = FastOutSlowInEasing),
+          ) +
+            slideOutVertically(
+              targetOffsetY = { it / 24 },
+              animationSpec = tween(280, easing = FastOutSlowInEasing),
+            ) +
+            fadeOut(tween(210))
+        } else {
+          slideOutOfContainer(
+            towards = AnimatedContentTransitionScope.SlideDirection.Right,
+            animationSpec = tween(navAnimDuration, easing = StudioEmphasizedEasing),
+            targetOffset = { it / 6 },
+          ) + fadeOut(tween(200))
+        }
+      },
+    ) { backStackEntry ->
       val route = backStackEntry.toRoute<EditorRoute>()
       LaunchedEffect(route.projectId) {
         if (activeProject?.id != route.projectId) {
           studioViewModel.openProject(route.projectId)
         }
       }
-      EditorScreen(
-        project = activeProject,
-        selectedCompositionId = selectedCompId,
-        selectedElementId = selectedElId,
-        playheadMs = playheadMs,
-        canUndo = canUndo,
-        canRedo = canRedo,
-        isBusy = isBusy,
-        statusBanner = statusBanner,
-        showSafeGuides = showSafeGuides,
-        geminiSettings = geminiSettings,
-        previewQualityMode = previewQuality,
-        speechState = speechState,
-        autoTranscribeState = autoTranscribeState,
-        pendingAiConfirmation = pendingAiConfirm,
-        onClearBanner = studioViewModel::clearBanner,
-        onToggleSafeGuides = studioViewModel::toggleSafeGuides,
-        onAttachVideo = studioViewModel::attachVideoToActiveProject,
-        onPlayheadUpdate = studioViewModel::updatePlayhead,
-        onSelectComposition = studioViewModel::selectComposition,
-        onSelectElement = studioViewModel::selectElement,
-        onUndo = studioViewModel::undo,
-        onRedo = studioViewModel::redo,
-        onUpdateTranscript = studioViewModel::updateTranscriptText,
-        onImportSubtitles = studioViewModel::importSubtitles,
-        onAutoTranscribeVideo = studioViewModel::requestAutoTranscribeVideo,
-        onStartDictation = studioViewModel::startSpeechDictation,
-        onStopDictation = studioViewModel::stopSpeechDictation,
-        onAdjustWordTiming = studioViewModel::adjustWordTiming,
-        transcribedSegments = transcribedSegments,
-        onUpdateSegmentText = studioViewModel::updateTranscribedSegmentText,
-        onGenerateCompositions = studioViewModel::requestGenerateCompositions,
-        onConfirmAiGeneration = studioViewModel::confirmAiGeneration,
-        onDismissAiConfirmation = studioViewModel::dismissAiConfirmation,
-        onUpdatePosition = studioViewModel::updateCompositionPosition,
-        onUpdateTiming = studioViewModel::updateCompositionTiming,
-        onSplitComposition = studioViewModel::splitComposition,
-        onMergeWithNext = studioViewModel::mergeWithNextComposition,
-        onDeleteComposition = studioViewModel::deleteComposition,
-        onAddCustomElement = studioViewModel::addCustomElement,
-        onUpdateElementText = studioViewModel::updateElementText,
-        onQuickColorElement = { compId, elId, hex ->
-          studioViewModel.applyElementStyle(
-            compId = compId,
-            elementId = elId,
-            scope = ApplyScope.SINGLE_ELEMENT,
-            colorHex = hex,
+      val resolvedProject = activeProject?.takeIf { it.id == route.projectId }
+      AnimatedContent(
+        targetState = resolvedProject?.id,
+        transitionSpec = {
+          (fadeIn(tween(260, easing = StudioEmphasizedEasing)) +
+            scaleIn(initialScale = 0.985f, animationSpec = tween(260, easing = StudioEmphasizedEasing)))
+            .togetherWith(fadeOut(tween(170)))
+        },
+        label = "editor_workspace_transition",
+      ) { loadedProjectId ->
+        if (loadedProjectId == null) {
+          EditorWorkspaceLoadingPlaceholder()
+        } else {
+          EditorScreen(
+            project = activeProject,
+            selectedCompositionId = selectedCompId,
+            selectedElementId = selectedElId,
+            playheadMs = playheadMs,
+            canUndo = canUndo,
+            canRedo = canRedo,
+            isBusy = isBusy,
+            statusBanner = statusBanner,
+            showSafeGuides = showSafeGuides,
+            geminiSettings = geminiSettings,
+            previewQualityMode = previewQuality,
+            speechState = speechState,
+            autoTranscribeState = autoTranscribeState,
+            pendingAiConfirmation = pendingAiConfirm,
+            onClearBanner = studioViewModel::clearBanner,
+            onToggleSafeGuides = studioViewModel::toggleSafeGuides,
+            onAttachVideo = studioViewModel::attachVideoToActiveProject,
+            onPlayheadUpdate = studioViewModel::updatePlayhead,
+            onSelectComposition = studioViewModel::selectComposition,
+            onSelectElement = studioViewModel::selectElement,
+            onUndo = studioViewModel::undo,
+            onRedo = studioViewModel::redo,
+            onUpdateTranscript = studioViewModel::updateTranscriptText,
+            onImportSubtitles = studioViewModel::importSubtitles,
+            onAutoTranscribeVideo = studioViewModel::requestAutoTranscribeVideo,
+            onStartDictation = studioViewModel::startSpeechDictation,
+            onStopDictation = studioViewModel::stopSpeechDictation,
+            onAdjustWordTiming = studioViewModel::adjustWordTiming,
+            transcribedSegments = transcribedSegments,
+            onUpdateSegmentText = studioViewModel::updateTranscribedSegmentText,
+            onGenerateCompositions = studioViewModel::requestGenerateCompositions,
+            onConfirmAiGeneration = studioViewModel::confirmAiGeneration,
+            onDismissAiConfirmation = studioViewModel::dismissAiConfirmation,
+            onUpdatePosition = studioViewModel::updateCompositionPosition,
+            onUpdateTiming = studioViewModel::updateCompositionTiming,
+            onSplitComposition = studioViewModel::splitComposition,
+            onMergeWithNext = studioViewModel::mergeWithNextComposition,
+            onDeleteComposition = studioViewModel::deleteComposition,
+            onAddCustomElement = studioViewModel::addCustomElement,
+            onUpdateElementText = studioViewModel::updateElementText,
+            onQuickColorElement = { compId, elId, hex ->
+              studioViewModel.applyElementStyle(
+                compId = compId,
+                elementId = elId,
+                scope = ApplyScope.SINGLE_ELEMENT,
+                colorHex = hex,
+              )
+            },
+            onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
+            onApplyPreset = studioViewModel::applyPreset,
+            onApplyPairing = studioViewModel::applyCuratedPairing,
+            speechLanguageTag = speechLanguage,
+            voicePackStatuses = voicePackStatuses,
+            onDownloadVoicePackForLanguage = studioViewModel::downloadOfflineVoicePackForLanguage,
+            onOpenPresets = { navController.navigate(PresetsRoute(route.projectId)) },
+            onOpenTypography = { navController.navigate(TypographyRoute(route.projectId)) },
+            onOpenAnimation = { navController.navigate(AnimationRoute(route.projectId)) },
+            onOpenAiSettings = { navController.navigate(AiSettingsRoute) },
+            onOpenExport = {
+              studioViewModel.resetExportState()
+              navController.navigate(ExportRoute(route.projectId))
+            },
+            onBack = { navController.popBackStack() },
           )
-        },
-        onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
-        onApplyPreset = studioViewModel::applyPreset,
-        onApplyPairing = studioViewModel::applyCuratedPairing,
-        speechLanguageTag = speechLanguage,
-        voicePackStatuses = voicePackStatuses,
-        onDownloadVoicePackForLanguage = studioViewModel::downloadOfflineVoicePackForLanguage,
-        onOpenPresets = { navController.navigate(PresetsRoute(route.projectId)) },
-        onOpenTypography = { navController.navigate(TypographyRoute(route.projectId)) },
-        onOpenAnimation = { navController.navigate(AnimationRoute(route.projectId)) },
-        onOpenAiSettings = { navController.navigate(AiSettingsRoute) },
-        onOpenExport = {
-          studioViewModel.resetExportState()
-          navController.navigate(ExportRoute(route.projectId))
-        },
-        onBack = { navController.popBackStack() },
-      )
+        }
+      }
     }
 
     composable<PresetsRoute> {
@@ -260,6 +382,30 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
         onStartExport = studioViewModel::startExport,
         onCancelExport = studioViewModel::cancelExport,
         onBack = { navController.popBackStack() },
+      )
+    }
+  }
+}
+
+@Composable
+private fun EditorWorkspaceLoadingPlaceholder() {
+  Box(
+    modifier = Modifier.fillMaxSize().background(StudioObsidian),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      CircularProgressIndicator(
+        color = StudioCoral,
+        strokeWidth = 2.5.dp,
+        modifier = Modifier.size(32.dp),
+      )
+      Text(
+        text = stringResource(R.string.editor_loading_workspace),
+        style = MaterialTheme.typography.labelLarge,
+        color = StudioTextSecondary,
       )
     }
   }

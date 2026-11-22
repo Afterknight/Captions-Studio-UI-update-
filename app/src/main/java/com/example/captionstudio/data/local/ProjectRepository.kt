@@ -24,6 +24,9 @@ class ProjectRepository(private val projectDao: ProjectDao) {
   val allProjects: Flow<List<CaptionProject>> =
     projectDao.observeAllProjects().map { entities -> entities.map { it.toDomain() } }
 
+  suspend fun getAllProjectsSnapshot(): List<CaptionProject> =
+    projectDao.getAllProjectsSnapshot().map { it.toDomain() }
+
   fun observeProject(projectId: String): Flow<CaptionProject?> =
     projectDao.observeProjectById(projectId).map { it?.toDomain() }
 
