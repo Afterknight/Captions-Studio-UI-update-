@@ -65,4 +65,15 @@
     <string name="preview_toggle_visibility_cd">Toggle live preview</string>
     <string name="motion_speed_label">Motion Speed</string>
     <string name="motion_intensity_label">Motion Intensity</string>
+    <string name="gallery_clone_style">Clone Style</string>
+    <string name="gallery_badge_ready_export">Ready to Export</string>
+    <string name="gallery_badge_tap_style">Tap to Style</string>
+    <string name="gallery_badge_behind_depth">Behind-Subject</string>
+    <string name="gallery_onboarding_title">Try Kinetic Captions in 1 Tap</string>
+    <string name="gallery_onboarding_subtitle">Preview agency-grade typography live, clone any Reel style, or import your clip.</string>
+    <string name="gallery_onboarding_launch_demo">Launch Live Demo Project</string>
+    <string name="export_watermark_title">Corner Watermark (Free Export)</string>
+    <string name="export_watermark_subtitle">Subtle \"Caption Studio\" badge • Toggle off anytime for clean Pro preview</string>
+    <string name="export_peak_ready_title">Ready to Go Viral!</string>
+    <string name="export_background_safe_hint">Runs safely in background — you can lock your phone or switch apps.</string>
 </resources>

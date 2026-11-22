@@ -235,6 +235,69 @@ class KineticCompositionRenderer(private val context: Context) {
     }
   }
 
+  /**
+   * Draws a tasteful, unobtrusive studio corner watermark on free exports (removable via Export toggle).
+   */
+  fun drawWatermark(canvas: Canvas, canvasWidth: Int, canvasHeight: Int) {
+    if (canvasWidth <= 0 || canvasHeight <= 0) return
+    val base = min(canvasWidth, canvasHeight).toFloat()
+    val textSizePx = (base * 0.025f).coerceIn(18f, 34f)
+    val padH = textSizePx * 0.72f
+    val padV = textSizePx * 0.42f
+    val marginX = base * 0.042f
+    val marginY = canvasHeight * 0.036f
+    val dotRadius = textSizePx * 0.20f
+
+    val label = "Caption Studio"
+    val wmTextPaint =
+      TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(232, 248, 248, 252)
+        textSize = textSizePx
+        letterSpacing = 0.02f
+        typeface = FontRegistry.getTypeface(context, "plus_jakarta_sans", 600, false)
+      }
+    val textW = wmTextPaint.measureText(label)
+    val fm = wmTextPaint.fontMetrics
+    val textH = fm.descent - fm.ascent
+
+    val pillW = padH * 2f + dotRadius * 2f + textSizePx * 0.42f + textW
+    val pillH = textH + padV * 2f
+    val right = canvasWidth - marginX
+    val bottom = canvasHeight - marginY
+    val left = right - pillW
+    val top = bottom - pillH
+
+    val pillPaint =
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(138, 12, 12, 16)
+        style = Paint.Style.FILL
+      }
+    val borderPaint =
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(46, 255, 255, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = max(1.2f, base * 0.002f)
+      }
+    val dotPaint =
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(238, 126, 112) // StudioCoral accent dot
+        style = Paint.Style.FILL
+      }
+
+    tempBgRect.set(left, top, right, bottom)
+    val radius = pillH / 2f
+    canvas.drawRoundRect(tempBgRect, radius, radius, pillPaint)
+    canvas.drawRoundRect(tempBgRect, radius, radius, borderPaint)
+
+    val dotCx = left + padH + dotRadius
+    val centerY = top + pillH / 2f
+    canvas.drawCircle(dotCx, centerY, dotRadius, dotPaint)
+
+    val textX = dotCx + dotRadius + textSizePx * 0.42f
+    val baselineY = centerY - (fm.ascent + fm.descent) / 2f
+    canvas.drawText(label, textX, baselineY, wmTextPaint)
+  }
+
   private fun drawMeasuredElement(
     canvas: Canvas,
     canvasWidth: Int,

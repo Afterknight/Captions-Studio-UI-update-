@@ -43,6 +43,7 @@ googleid = "1.1.1"
 media3 = "1.11.1"
 kotlinxSerializationJson = "1.8.0"
 mlkitSegmentationSelfie = "16.0.0-beta6"
+mlkitTextRecognition = "16.0.1"
 voskAndroid = "0.3.47"
 jna = "5.13.0"
 
@@ -106,6 +107,7 @@ androidx-media3-effect = { group = "androidx.media3", name = "media3-effect", ve
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 mlkit-segmentation-selfie = { group = "com.google.mlkit", name = "segmentation-selfie", version.ref = "mlkitSegmentationSelfie" }
+mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitTextRecognition" }
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "voskAndroid" }
 jna-aar = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 

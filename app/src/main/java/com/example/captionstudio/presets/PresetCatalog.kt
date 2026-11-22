@@ -246,8 +246,21 @@ object PresetCatalog {
       ),
     )
 
+  @Volatile
+  private var customPresetsList: List<PresetDefinition> = emptyList()
+
+  fun customPresets(): List<PresetDefinition> = customPresetsList
+
+  fun allPresets(): List<PresetDefinition> = customPresetsList + presets
+
+  fun registerCustomPresets(customs: List<PresetDefinition>) {
+    customPresetsList = customs.distinctBy { it.id }
+  }
+
   fun findById(id: String): PresetDefinition {
-    return presets.firstOrNull { it.id == id } ?: presets.first()
+    return customPresetsList.firstOrNull { it.id == id }
+      ?: presets.firstOrNull { it.id == id }
+      ?: presets.first()
   }
 
   /**
@@ -304,10 +317,25 @@ object PresetCatalog {
               HierarchyLevel.SUPPORTING -> 19f
               HierarchyLevel.SECONDARY -> 16f
             }
+          val useBehindSubject =
+            if (preset.preferBehindSubject && el.hierarchyLevel == HierarchyLevel.DOMINANT) {
+              com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT
+            } else {
+              el.depthLayer
+            }
           el.copy(
             fontFamilyId = roleFont,
             colorHex = roleColor,
             fontSizeSp = baseSize.coerceIn(15f, 74f),
+            uppercase = if (preset.preferUppercase) true else el.uppercase,
+            strokeWidthFactor =
+              if (preset.strokeWidthFactor > 0f) preset.strokeWidthFactor else el.strokeWidthFactor,
+            strokeColorHex =
+              if (preset.strokeWidthFactor > 0f) preset.strokeColorHex else el.strokeColorHex,
+            backgroundColorHex = preset.backgroundPillColorHex ?: el.backgroundColorHex,
+            backgroundAlpha =
+              if (preset.backgroundPillColorHex != null) preset.backgroundPillAlpha else el.backgroundAlpha,
+            depthLayer = useBehindSubject,
             glowColorHex =
               if (roleColor == StudioPalette.YELLOW || roleColor == StudioPalette.ORANGE) roleColor
               else null,
@@ -326,6 +354,10 @@ object PresetCatalog {
         easing = preset.defaultEasing,
         entryDurationMs = preset.entryDurationMs,
         exitDurationMs = preset.exitDurationMs,
+        depthLayer =
+          if (preset.preferBehindSubject) com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT
+          else comp.depthLayer,
+        backgroundMaskEnabled = if (preset.preferBehindSubject) true else comp.backgroundMaskEnabled,
         elements = baseElements,
       )
     }

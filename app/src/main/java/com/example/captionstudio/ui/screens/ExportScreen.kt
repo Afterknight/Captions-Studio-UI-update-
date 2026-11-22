@@ -1,6 +1,13 @@
 package com.example.captionstudio.ui.screens
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +19,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
@@ -29,16 +39,28 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.captionstudio.domain.model.AspectRatioOption
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ExportFrameRate
@@ -46,6 +68,8 @@ import com.example.captionstudio.domain.model.ExportPreferences
 import com.example.captionstudio.domain.model.ExportQualityMode
 import com.example.captionstudio.domain.model.ExportResolution
 import com.example.captionstudio.media.ExportUiState
+import com.example.captionstudio.presets.PresetCatalog
+import com.example.captionstudio.presets.StyleDeepLinkCodec
 import com.example.captionstudio.ui.components.ExportedVideoReviewPlayer
 import com.example.captionstudio.ui.components.StudioCoralPillButton
 import com.example.captionstudio.ui.components.StudioGlassCard
@@ -66,11 +90,40 @@ fun ExportScreen(
   onUpdatePreferences: (ExportPreferences) -> Unit,
   onStartExport: () -> Unit,
   onCancelExport: () -> Unit,
+  onSaveCurrentStyleAsPreset: () -> Unit = {},
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val haptics = LocalHapticFeedback.current
   val prefs = project?.exportPreferences ?: ExportPreferences()
   val hasVideo = !project?.videoUriString.isNullOrBlank()
+  var savedLookToast by remember { mutableStateOf(false) }
+
+  // Request POST_NOTIFICATIONS cleanly on Android 13+ before starting ForegroundService export
+  val notifPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+      onStartExport()
+    }
+
+  fun launchExportSafely() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      val granted =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+          PackageManager.PERMISSION_GRANTED
+      if (!granted) {
+        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        return
+      }
+    }
+    onStartExport()
+  }
+
+  // Peak-End Rule: Tactile haptic pulse the instant export completes
+  LaunchedEffect(exportState) {
+    if (exportState is ExportUiState.Completed) {
+      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+  }
 
   val chipColors =
     FilterChipDefaults.filterChipColors(
@@ -157,7 +210,7 @@ fun ExportScreen(
           }
         }
 
-        // Format Settings
+        // Format Settings + Tasteful Removable Watermark
         item {
           StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -212,11 +265,36 @@ fun ExportScreen(
                   )
                 }
               }
+
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                  Text(
+                    text = stringResource(R.string.export_watermark_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = StudioTextPrimary,
+                  )
+                  Text(
+                    text = stringResource(R.string.export_watermark_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = StudioTextSecondary,
+                  )
+                }
+                Switch(
+                  checked = prefs.showWatermark,
+                  onCheckedChange = { onUpdatePreferences(prefs.copy(showWatermark = it)) },
+                  colors = SwitchDefaults.colors(checkedTrackColor = StudioCoral),
+                  modifier = Modifier.testTag("export_watermark_switch"),
+                )
+              }
             }
           }
         }
 
-        // Export CTA & State
+        // Export CTA & State (Background ForegroundService + Peak-End Celebration)
         item {
           when (exportState) {
             is ExportUiState.Idle -> {
@@ -233,7 +311,7 @@ fun ExportScreen(
                 leadingIcon = Icons.Filled.MovieCreation,
                 showTrailingArrow = true,
                 enabled = hasVideo,
-                onClick = onStartExport,
+                onClick = { launchExportSafely() },
                 modifier = Modifier.testTag("start_export_button"),
               )
             }
@@ -244,12 +322,18 @@ fun ExportScreen(
                 cornerRadius = 22.dp,
                 borderColor = StudioCoral.copy(alpha = 0.6f),
               ) {
-                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                   Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                   ) {
-                    Text(exportState.stageLabel, color = StudioTextPrimary, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                      exportState.stageLabel,
+                      color = StudioTextPrimary,
+                      style = MaterialTheme.typography.titleSmall,
+                      modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text("${exportState.progressPercent}%", color = StudioCoralLight, fontWeight = FontWeight.SemiBold)
                   }
                   LinearProgressIndicator(
@@ -257,6 +341,11 @@ fun ExportScreen(
                     color = StudioCoral,
                     trackColor = StudioObsidian,
                     modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                  )
+                  Text(
+                    text = stringResource(R.string.export_background_safe_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StudioTextSecondary,
                   )
                   OutlinedButton(
                     onClick = onCancelExport,
@@ -273,33 +362,147 @@ fun ExportScreen(
               StudioGlassCard(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 22.dp,
-                borderColor = StudioSuccess.copy(alpha = 0.65f),
+                borderColor = StudioSuccess.copy(alpha = 0.7f),
               ) {
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                   Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = StudioSuccess)
                     Spacer(Modifier.width(8.dp))
-                    Text("Saved to Gallery", style = MaterialTheme.typography.titleMedium, color = StudioSuccess)
+                    Column {
+                      Text(
+                        stringResource(R.string.export_peak_ready_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = StudioSuccess,
+                      )
+                      Text(
+                        "Saved to Gallery • ${exportState.fileSizeBytes / 1024} KB • ${"%.1f".format(exportState.verifiedDurationMs / 1000.0)}s",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StudioTextSecondary,
+                      )
+                    }
                   }
-                  Text(
-                    "${exportState.fileName}\n${exportState.fileSizeBytes / 1024} KB • ${exportState.verifiedDurationMs / 1000.0}s • Audio ${if (exportState.hasAudio) "preserved" else "none"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = StudioTextSecondary,
-                  )
+
                   ExportedVideoReviewPlayer(
                     videoUri = exportState.galleryUri,
                     aspectRatio = prefs.aspectRatio,
                   )
+
+                  // Peak-End 1-Tap Direct Social Platform Share Row
+                  Text(
+                    text = "Direct Post To",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = StudioTextSecondary,
+                  )
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    DirectSocialSharePill(
+                      label = "Reels",
+                      onClick = {
+                        shareVideoToPlatform(
+                          context,
+                          exportState.galleryUri,
+                          listOf("com.instagram.android"),
+                          "Share to Instagram Reels",
+                        )
+                      },
+                      modifier = Modifier.weight(1f).testTag("direct_share_reels"),
+                    )
+                    DirectSocialSharePill(
+                      label = "TikTok",
+                      onClick = {
+                        shareVideoToPlatform(
+                          context,
+                          exportState.galleryUri,
+                          listOf("com.zhiliaoapp.musically", "com.ss.android.ugc.trill"),
+                          "Share to TikTok",
+                        )
+                      },
+                      modifier = Modifier.weight(1f).testTag("direct_share_tiktok"),
+                    )
+                    DirectSocialSharePill(
+                      label = "Shorts",
+                      onClick = {
+                        shareVideoToPlatform(
+                          context,
+                          exportState.galleryUri,
+                          listOf("com.google.android.youtube"),
+                          "Share to YouTube Shorts",
+                        )
+                      },
+                      modifier = Modifier.weight(1f).testTag("direct_share_shorts"),
+                    )
+                    DirectSocialSharePill(
+                      label = "WhatsApp",
+                      onClick = {
+                        shareVideoToPlatform(
+                          context,
+                          exportState.galleryUri,
+                          listOf("com.whatsapp"),
+                          "Share to WhatsApp",
+                        )
+                      },
+                      modifier = Modifier.weight(1f).testTag("direct_share_whatsapp"),
+                    )
+                  }
+
+                  // Peak-End Viral & Retention Actions: Save Look + Share Style Link
+                  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                      onClick = {
+                        onSaveCurrentStyleAsPreset()
+                        savedLookToast = true
+                      },
+                      shape = CircleShape,
+                      modifier = Modifier.weight(1f).height(46.dp).testTag("save_look_preset_button"),
+                    ) {
+                      Icon(
+                        Icons.Filled.BookmarkAdd,
+                        contentDescription = null,
+                        tint = StudioCoralLight,
+                        modifier = Modifier.size(16.dp),
+                      )
+                      Spacer(Modifier.width(6.dp))
+                      Text(
+                        if (savedLookToast) "Saved!" else "Save Preset",
+                        color = StudioTextPrimary,
+                        maxLines = 1,
+                      )
+                    }
+                    OutlinedButton(
+                      onClick = {
+                        val activePreset = PresetCatalog.findById(project?.presetId ?: PresetCatalog.DEFAULT_PRESET_ID)
+                        val link = StyleDeepLinkCodec.encodeToDeepLink(activePreset)
+                        val send =
+                          Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(
+                              Intent.EXTRA_TEXT,
+                              "Made with Caption Studio — copy my exact caption style: $link",
+                            )
+                          }
+                        context.startActivity(Intent.createChooser(send, "Share Style Deep Link"))
+                      },
+                      shape = CircleShape,
+                      modifier = Modifier.weight(1f).height(46.dp).testTag("export_share_style_link"),
+                    ) {
+                      Icon(
+                        Icons.Filled.Link,
+                        contentDescription = null,
+                        tint = StudioCoralLight,
+                        modifier = Modifier.size(16.dp),
+                      )
+                      Spacer(Modifier.width(6.dp))
+                      Text("Style Link", color = StudioTextPrimary, maxLines = 1)
+                    }
+                  }
+
                   Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                       onClick = {
-                        val shareIntent =
-                          Intent(Intent.ACTION_SEND).apply {
-                            type = "video/mp4"
-                            putExtra(Intent.EXTRA_STREAM, exportState.galleryUri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                          }
-                        context.startActivity(Intent.createChooser(shareIntent, "Share Captioned Video"))
+                        shareVideoToPlatform(context, exportState.galleryUri, emptyList(), "Share Captioned Video")
                       },
                       shape = CircleShape,
                       colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
@@ -307,10 +510,10 @@ fun ExportScreen(
                     ) {
                       Icon(Icons.Filled.Share, contentDescription = null)
                       Spacer(Modifier.width(6.dp))
-                      Text("Share", fontWeight = FontWeight.SemiBold)
+                      Text("More Apps", fontWeight = FontWeight.SemiBold)
                     }
                     OutlinedButton(
-                      onClick = onStartExport,
+                      onClick = { launchExportSafely() },
                       shape = CircleShape,
                       modifier = Modifier.weight(1f).height(48.dp),
                     ) {
@@ -332,7 +535,7 @@ fun ExportScreen(
                   Text(exportState.message, style = MaterialTheme.typography.bodyMedium, color = StudioTextSecondary)
                   StudioCoralPillButton(
                     text = "Retry Export",
-                    onClick = onStartExport,
+                    onClick = { launchExportSafely() },
                     showTrailingArrow = false,
                   )
                 }
@@ -342,5 +545,69 @@ fun ExportScreen(
         }
       }
     }
+  }
+}
+
+@Composable
+private fun DirectSocialSharePill(
+  label: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Button(
+    onClick = onClick,
+    shape = CircleShape,
+    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+    colors =
+      ButtonDefaults.buttonColors(
+        containerColor = StudioCoralContainer,
+        contentColor = StudioCoralLight,
+      ),
+    modifier = modifier.height(44.dp),
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      softWrap = false,
+    )
+  }
+}
+
+private fun shareVideoToPlatform(
+  context: Context,
+  videoUri: Uri,
+  targetPackages: List<String>,
+  chooserTitle: String,
+) {
+  val pm = context.packageManager
+  val installedPkg =
+    targetPackages.firstOrNull { pkg ->
+      runCatching { pm.getPackageInfo(pkg, 0) }.isSuccess
+    }
+  val shareIntent =
+    Intent(Intent.ACTION_SEND).apply {
+      type = "video/mp4"
+      putExtra(Intent.EXTRA_STREAM, videoUri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      if (installedPkg != null) {
+        setPackage(installedPkg)
+      }
+    }
+  try {
+    if (installedPkg != null) {
+      context.startActivity(shareIntent)
+    } else {
+      context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+    }
+  } catch (_: Throwable) {
+    val fallback =
+      Intent(Intent.ACTION_SEND).apply {
+        type = "video/mp4"
+        putExtra(Intent.EXTRA_STREAM, videoUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+    context.startActivity(Intent.createChooser(fallback, chooserTitle))
   }
 }

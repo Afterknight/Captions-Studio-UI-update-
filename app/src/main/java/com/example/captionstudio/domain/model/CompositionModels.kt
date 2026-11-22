@@ -190,6 +190,15 @@ enum class SafeRegion(
 }
 
 @Serializable
+enum class SafeZonePlatform(val label: String, val shortLabel: String) {
+  NONE("Off", "Off"),
+  GRID("Grid", "Grid"),
+  TIKTOK("TikTok", "TikTok"),
+  REELS("Instagram Reels", "Reels"),
+  SHORTS("YouTube Shorts", "Shorts"),
+}
+
+@Serializable
 enum class EntryAnimationType(val label: String) {
   SCALE_RISE("Scale & Rise"),
   SLIDE_UP("Slide Up"),
@@ -412,6 +421,7 @@ data class ExportPreferences(
   val resolution: ExportResolution = ExportResolution.RES_1080P,
   val frameRate: ExportFrameRate = ExportFrameRate.FPS_30,
   val qualityMode: ExportQualityMode = ExportQualityMode.BALANCED,
+  val showWatermark: Boolean = true,
 )
 
 @Immutable
@@ -433,6 +443,7 @@ data class FontRoleOverrides(
 )
 
 @Immutable
+@Serializable
 data class PresetDefinition(
   val id: String,
   val name: String,
@@ -455,6 +466,13 @@ data class PresetDefinition(
   val shadowRadiusFactor: Float,
   val preferredRegions: List<SafeRegion>,
   val sampleSentence: String,
+  val strokeWidthFactor: Float = 0f,
+  val strokeColorHex: String = StudioPalette.SHADOW,
+  val backgroundPillColorHex: String? = null,
+  val backgroundPillAlpha: Float = 0.74f,
+  val preferBehindSubject: Boolean = false,
+  val preferUppercase: Boolean = false,
+  val isCustomCloned: Boolean = false,
 )
 
 @Immutable

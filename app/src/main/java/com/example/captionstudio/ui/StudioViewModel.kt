@@ -28,9 +28,11 @@ import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.LayerMotionEffect
+import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.ProjectSortOption
 import com.example.captionstudio.domain.model.SafeRegion
+import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.domain.model.VideoMetadata
@@ -47,10 +49,11 @@ import com.example.captionstudio.media.SpeechRecognitionState
 import com.example.captionstudio.media.SpeechTranscriptionManager
 import com.example.captionstudio.media.VideoAnalysisService
 import com.example.captionstudio.media.VideoAutoTranscriber
-import com.example.captionstudio.media.VideoExportService
+import com.example.captionstudio.media.VideoExportCoordinator
 import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.media.VoskVideoTranscriptionService
 import com.example.captionstudio.presets.PresetCatalog
+import com.example.captionstudio.presets.StyleDeepLinkCodec
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.typography.FontRegistry
 import com.example.captionstudio.ui.components.clearVideoThumbnailCache
@@ -89,10 +92,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val keyStore = SecureApiKeyStore(application)
   private val speechManager = SpeechTranscriptionManager(application)
   private val autoTranscriber = VideoAutoTranscriber(application)
-  private val exportService = VideoExportService(application)
 
   init {
     FontRegistry.loadCachedCustomFonts(application)
+    viewModelScope.launch {
+      settingsRepo.customPresets.collect { list ->
+        PresetCatalog.registerCustomPresets(list)
+      }
+    }
   }
 
   private val _gallerySearchQuery = MutableStateFlow("")
@@ -167,7 +174,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   val speechState: StateFlow<SpeechRecognitionState> = speechManager.state
   val autoTranscribeState: StateFlow<AutoTranscribeUiState> = autoTranscriber.state
-  val exportState: StateFlow<ExportUiState> = exportService.state
+  val exportState: StateFlow<ExportUiState> = VideoExportCoordinator.state(application)
+
+  val customPresets: StateFlow<List<PresetDefinition>> =
+    settingsRepo.customPresets.stateIn(
+      viewModelScope,
+      SharingStarted.WhileSubscribed(5000),
+      emptyList(),
+    )
+
+  val isCreatorMode: StateFlow<Boolean> =
+    settingsRepo.isCreatorMode.stateIn(
+      viewModelScope,
+      SharingStarted.WhileSubscribed(5000),
+      true,
+    )
 
   private val _activeProject = MutableStateFlow<CaptionProject?>(null)
   val activeProject: StateFlow<CaptionProject?> = _activeProject.asStateFlow()
@@ -196,6 +217,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val _showSafeGuides = MutableStateFlow(false)
   val showSafeGuides: StateFlow<Boolean> = _showSafeGuides.asStateFlow()
 
+  private val _safeZonePlatform = MutableStateFlow(SafeZonePlatform.NONE)
+  val safeZonePlatform: StateFlow<SafeZonePlatform> = _safeZonePlatform.asStateFlow()
+
   private val _voicePackStatuses = MutableStateFlow<List<OfflineVoicePackStatus>>(emptyList())
   val voicePackStatuses: StateFlow<List<OfflineVoicePackStatus>> = _voicePackStatuses.asStateFlow()
 
@@ -222,7 +246,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun toggleSafeGuides() {
-    _showSafeGuides.value = !_showSafeGuides.value
+    cycleSafeZonePlatform()
+  }
+
+  fun cycleSafeZonePlatform() {
+    val entries = SafeZonePlatform.entries
+    val next = entries[(entries.indexOf(_safeZonePlatform.value) + 1) % entries.size]
+    setSafeZonePlatform(next)
+  }
+
+  fun setSafeZonePlatform(platform: SafeZonePlatform) {
+    _safeZonePlatform.value = platform
+    _showSafeGuides.value = platform != SafeZonePlatform.NONE
+  }
+
+  fun setCreatorMode(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setCreatorMode(enabled) }
   }
 
   fun updateGallerySearchQuery(query: String) {
@@ -1579,7 +1618,251 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _statusBanner.value = "Removed cached offline voice pack."
   }
 
-  // --- Export ---
+  // --- Custom Cloned Presets, Shareable Deep Links, Creator Macros & Descript Word Editing ---
+
+  fun saveCustomPreset(preset: PresetDefinition, applyToActiveProject: Boolean) {
+    viewModelScope.launch {
+      settingsRepo.saveCustomPreset(preset)
+      val updated = (listOf(preset) + customPresets.value.filterNot { it.id == preset.id }).take(30)
+      PresetCatalog.registerCustomPresets(updated)
+      if (applyToActiveProject && _activeProject.value != null) {
+        applyPreset(preset.id)
+      }
+      _statusBanner.value =
+        if (applyToActiveProject) "Saved & applied \"${preset.name}\" style!"
+        else "Saved \"${preset.name}\" to My Presets!"
+    }
+  }
+
+  fun deleteCustomPreset(presetId: String) {
+    viewModelScope.launch {
+      settingsRepo.deleteCustomPreset(presetId)
+      PresetCatalog.registerCustomPresets(customPresets.value.filterNot { it.id == presetId })
+      _statusBanner.value = "Removed custom style."
+    }
+  }
+
+  fun importStyleFromDeepLink(rawLink: String): Boolean {
+    val decoded = StyleDeepLinkCodec.decodeFromDeepLink(rawLink) ?: return false
+    saveCustomPreset(decoded, applyToActiveProject = _activeProject.value != null)
+    _statusBanner.value = "Imported style \"${decoded.name}\" from link!"
+    return true
+  }
+
+  fun buildCurrentProjectPreset(customName: String): PresetDefinition? {
+    val project = _activeProject.value ?: return null
+    val base = PresetCatalog.findById(project.presetId)
+    val firstComp = project.compositions.firstOrNull()
+    val dom = firstComp?.elements?.firstOrNull { it.hierarchyLevel == HierarchyLevel.DOMINANT }
+    val sup = firstComp?.elements?.firstOrNull { it.hierarchyLevel == HierarchyLevel.SUPPORTING }
+    val exp = firstComp?.elements?.firstOrNull { it.hierarchyLevel == HierarchyLevel.EXPRESSIVE }
+    return base.copy(
+      id = "saved_${UUID.randomUUID().toString().take(8)}",
+      name = customName.ifBlank { "${project.title} Look" }.trim().uppercase(),
+      tagline = "Saved Creator Preset • ${(dom?.fontFamilyId ?: base.heavyFontId).replace('_', ' ')}",
+      heavyFontId = dom?.fontFamilyId ?: base.heavyFontId,
+      supportingFontId = sup?.fontFamilyId ?: base.supportingFontId,
+      expressiveFontId = exp?.fontFamilyId ?: base.expressiveFontId,
+      primaryColorHex = sup?.colorHex ?: base.primaryColorHex,
+      dominantColorHex = dom?.colorHex ?: base.dominantColorHex,
+      expressiveColorHex = exp?.colorHex ?: base.expressiveColorHex,
+      defaultEntryAnim = firstComp?.entryAnimation ?: base.defaultEntryAnim,
+      defaultExitAnim = firstComp?.exitAnimation ?: base.defaultExitAnim,
+      defaultEasing = firstComp?.easing ?: base.defaultEasing,
+      entryDurationMs = firstComp?.entryDurationMs ?: base.entryDurationMs,
+      exitDurationMs = firstComp?.exitDurationMs ?: base.exitDurationMs,
+      strokeWidthFactor = dom?.strokeWidthFactor ?: base.strokeWidthFactor,
+      strokeColorHex = dom?.strokeColorHex ?: base.strokeColorHex,
+      backgroundPillColorHex = sup?.backgroundColorHex ?: dom?.backgroundColorHex,
+      preferBehindSubject = firstComp?.hasBehindSubjectElements() ?: base.preferBehindSubject,
+      preferUppercase = dom?.uppercase ?: base.preferUppercase,
+      isCustomCloned = true,
+    )
+  }
+
+  fun scaleAllCompositionsText(scaleMultiplier: Float) {
+    val project = _activeProject.value ?: return
+    val clamped = scaleMultiplier.coerceIn(0.70f, 1.40f)
+    val updated =
+      project.compositions.map { comp ->
+        comp.copy(
+          elements =
+            comp.elements.map { el ->
+              val baseSp =
+                when (el.hierarchyLevel) {
+                  HierarchyLevel.DOMINANT -> 54f
+                  HierarchyLevel.EXPRESSIVE -> 34f
+                  HierarchyLevel.SUPPORTING -> 20f
+                  HierarchyLevel.SECONDARY -> 16f
+                }
+              el.copy(fontSizeSp = (baseSp * clamped).coerceIn(13f, 76f))
+            }
+        )
+      }
+    commitMutation(project.copy(compositions = updated), recordHistory = false)
+  }
+
+  fun setAllCompositionsHeight(anchorY: Float) {
+    val project = _activeProject.value ?: return
+    val y = anchorY.coerceIn(0.12f, 0.88f)
+    val updated =
+      project.compositions.map { comp ->
+        comp.copy(anchorYFraction = y, region = SafeRegion.CUSTOM)
+      }
+    commitMutation(project.copy(compositions = updated), recordHistory = false)
+  }
+
+  fun setAllCompositionsEnergy(energy01: Float) {
+    val project = _activeProject.value ?: return
+    val e = energy01.coerceIn(0f, 1f)
+    val entryMs = (260f - e * 165f).toInt().coerceIn(95, 260)
+    val easing =
+      when {
+        e > 0.68f -> AnimationEasingType.SPRING_OVERSHOOT
+        e > 0.35f -> AnimationEasingType.DECELERATE
+        else -> AnimationEasingType.SMOOTH_IN_OUT
+      }
+    val updated =
+      project.compositions.map { comp ->
+        comp.copy(
+          entryDurationMs = entryMs,
+          exitDurationMs = (entryMs * 0.78f).toInt().coerceIn(80, 200),
+          easing = easing,
+        )
+      }
+    commitMutation(project.copy(compositions = updated), recordHistory = false)
+  }
+
+  fun quickEditWord(
+    wordIndex: Int,
+    newText: String,
+    emphasis: HierarchyLevel,
+    behindSubject: Boolean,
+  ) {
+    val project = _activeProject.value ?: return
+    if (wordIndex !in project.wordTimings.indices) return
+    val clean = newText.trim()
+    if (clean.isEmpty()) return
+
+    val oldWord = project.wordTimings[wordIndex]
+    val newEmphasisScore =
+      when (emphasis) {
+        HierarchyLevel.DOMINANT -> 0.95f
+        HierarchyLevel.EXPRESSIVE -> 0.82f
+        else -> 0.15f
+      }
+    val updatedTimings =
+      project.wordTimings.toMutableList().apply {
+        this[wordIndex] = oldWord.copy(word = clean, emphasisScore = newEmphasisScore)
+      }
+    val updatedTranscript = updatedTimings.joinToString(" ") { it.word }
+    val preset = PresetCatalog.findById(project.presetId)
+
+    val updatedComps =
+      project.compositions.map { comp ->
+        val matchesTiming = oldWord.startMs in (comp.startMs - 80L)..(comp.endMs + 80L)
+        if (!matchesTiming) {
+          comp
+        } else {
+          val replacedWordMappings =
+            comp.wordMappings.map { wm ->
+              if (wm.startMs == oldWord.startMs && wm.word.equals(oldWord.word, ignoreCase = true)) {
+                wm.copy(word = clean, emphasisScore = newEmphasisScore)
+              } else wm
+            }
+          val replacedElements =
+            comp.elements.map { el ->
+              if (el.text.contains(oldWord.word, ignoreCase = true)) {
+                val updatedElText =
+                  el.text.replaceFirst(oldWord.word, clean, ignoreCase = true)
+                val targetRole =
+                  when (emphasis) {
+                    HierarchyLevel.DOMINANT -> FontRole.HEAVY
+                    HierarchyLevel.EXPRESSIVE -> FontRole.EXPRESSIVE
+                    else -> FontRole.SUPPORTING
+                  }
+                val targetFont =
+                  when (targetRole) {
+                    FontRole.HEAVY -> project.fontOverrides.heavyFontId ?: preset.heavyFontId
+                    FontRole.EXPRESSIVE -> project.fontOverrides.expressiveFontId ?: preset.expressiveFontId
+                    FontRole.SUPPORTING -> project.fontOverrides.supportingFontId ?: preset.supportingFontId
+                  }
+                val targetColor =
+                  when (emphasis) {
+                    HierarchyLevel.DOMINANT -> preset.dominantColorHex
+                    HierarchyLevel.EXPRESSIVE -> preset.expressiveColorHex
+                    else -> preset.primaryColorHex
+                  }
+                val targetSize =
+                  when (emphasis) {
+                    HierarchyLevel.DOMINANT -> 54f * preset.dominantScaleMultiplier
+                    HierarchyLevel.EXPRESSIVE -> 34f * preset.expressiveScaleMultiplier
+                    else -> 20f
+                  }
+                el.copy(
+                  text = updatedElText,
+                  role = targetRole,
+                  hierarchyLevel = emphasis,
+                  fontFamilyId = targetFont,
+                  colorHex = targetColor,
+                  fontSizeSp = targetSize.coerceIn(15f, 74f),
+                  depthLayer = if (behindSubject) DepthLayer.BEHIND_SUBJECT else DepthLayer.IN_FRONT,
+                )
+              } else el
+            }
+          comp.copy(
+            originalText = replacedWordMappings.joinToString(" ") { it.word }.ifBlank { comp.originalText },
+            wordMappings = replacedWordMappings,
+            elements = replacedElements,
+            depthLayer = if (behindSubject) DepthLayer.BEHIND_SUBJECT else comp.depthLayer,
+            backgroundMaskEnabled = if (behindSubject) true else comp.backgroundMaskEnabled,
+          )
+        }
+      }
+
+    commitMutation(
+      project.copy(
+        transcriptText = updatedTranscript,
+        wordTimings = updatedTimings,
+        compositions = updatedComps,
+      ),
+      recordHistory = true,
+    )
+    _statusBanner.value = "Updated \"$clean\""
+  }
+
+  fun deleteWordAt(wordIndex: Int) {
+    val project = _activeProject.value ?: return
+    if (wordIndex !in project.wordTimings.indices) return
+    val removed = project.wordTimings[wordIndex]
+    val updatedTimings = project.wordTimings.toMutableList().apply { removeAt(wordIndex) }
+    val updatedTranscript = updatedTimings.joinToString(" ") { it.word }
+    val preset = PresetCatalog.findById(project.presetId)
+    val regenerated =
+      if (updatedTimings.isEmpty()) {
+        emptyList()
+      } else {
+        LocalCompositionEngine.generateCompositions(
+          transcript = updatedTranscript,
+          wordTimings = updatedTimings,
+          totalDurationMs = max(project.metadata.durationMs, updatedTimings.last().endMs),
+          preset = preset,
+          analysisReport = project.analysisReport,
+          fontOverrides = project.fontOverrides,
+        )
+      }
+    commitMutation(
+      project.copy(
+        transcriptText = updatedTranscript,
+        wordTimings = updatedTimings,
+        compositions = regenerated,
+      ),
+      recordHistory = true,
+    )
+    _statusBanner.value = "Removed \"${removed.word}\""
+  }
+
+  // --- Export (Background ForegroundService) ---
 
   fun updateExportPreferences(prefs: ExportPreferences) {
     val project = _activeProject.value ?: return
@@ -1590,7 +1873,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val project = _activeProject.value ?: return
     val uri =
       if (project.videoUriString.isBlank()) Uri.EMPTY else Uri.parse(project.videoUriString)
-    exportService.startExport(
+    VideoExportCoordinator.startForegroundExport(
+      context = getApplication(),
       videoUri = uri,
       compositions = project.compositions,
       presetId = project.presetId,
@@ -1600,17 +1884,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun cancelExport() {
-    exportService.cancelExport()
+    VideoExportCoordinator.cancelExport(getApplication())
   }
 
   fun resetExportState() {
-    exportService.resetState()
+    VideoExportCoordinator.resetState(getApplication())
   }
 
   override fun onCleared() {
     super.onCleared()
     speechManager.stopListening()
     autoTranscriber.cancel()
-    exportService.cancelExport()
+    // Do NOT cancel active VideoExportForegroundService here so background exports complete reliably!
   }
 }

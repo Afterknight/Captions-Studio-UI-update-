@@ -79,6 +79,7 @@ import com.example.R
 import com.example.captionstudio.domain.model.AspectRatioOption
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.PreviewQualityMode
+import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 import com.example.captionstudio.engine.KineticCompositionRenderer
 import com.example.captionstudio.media.SubjectMaskProcessor
@@ -109,6 +110,7 @@ fun KineticPreviewStage(
   repeatLoop: Boolean = true,
   previewQuality: PreviewQualityMode,
   showSafeGuides: Boolean,
+  safeZonePlatform: SafeZonePlatform = if (showSafeGuides) SafeZonePlatform.GRID else SafeZonePlatform.NONE,
   onPlayheadUpdate: (Long) -> Unit,
   onPlayingChanged: (Boolean) -> Unit,
   onDragCompositionAnchor: (compId: String, anchorX: Float, anchorY: Float) -> Unit,
@@ -286,10 +288,10 @@ fun KineticPreviewStage(
         ?: compositions.firstOrNull { it.id == selectedCompositionId }
     }
   val needsSubjectMask = hasVideo && activeComp?.hasBehindSubjectElements() == true
-  val maskCadenceMs = if (effectivePerformanceMode) 110L else 55L
+  val maskCadenceMs = if (effectivePerformanceMode) 90L else 42L
   val maskBucket = playheadMs / maskCadenceMs
 
-  // Lazily run downscaled on-device ML Kit segmentation ONLY when an active behind-subject caption is visible
+  // Lazily run high-precision edge-guided on-device segmentation ONLY when behind-subject caption is active
   LaunchedEffect(videoUriString, needsSubjectMask, maskBucket) {
     if (!needsSubjectMask) {
       activeSubjectMask = null
@@ -305,8 +307,8 @@ fun KineticPreviewStage(
       cachedTextureViewRef.value
         ?: playerViewRef.value?.let { pv -> findTextureView(pv).also { cachedTextureViewRef.value = it } }
     if (texView != null && texView.isAvailable && texView.width > 0 && texView.height > 0) {
-      val sampleW = if (effectivePerformanceMode) 144 else 192
-      val sampleH = ((sampleW / ratio).toInt()).coerceIn(96, 320)
+      val sampleW = if (effectivePerformanceMode) 176 else 256
+      val sampleH = ((sampleW / ratio).toInt()).coerceIn(112, 420)
       val snap = runCatching { texView.getBitmap(sampleW, sampleH) }.getOrNull()
       if (snap != null) {
         val computed =
@@ -314,6 +316,7 @@ fun KineticPreviewStage(
             videoKey = videoUriString,
             positionMs = playheadMs,
             frameBitmap = snap,
+            highPrecision = !effectivePerformanceMode,
           )
         snap.recycle()
         if (computed != null) {
@@ -395,7 +398,12 @@ fun KineticPreviewStage(
             )
           }
     ) {
-      if (showSafeGuides) {
+      val effectivePlatform =
+        if (safeZonePlatform != SafeZonePlatform.NONE) safeZonePlatform
+        else if (showSafeGuides) SafeZonePlatform.GRID
+        else SafeZonePlatform.NONE
+
+      if (effectivePlatform == SafeZonePlatform.GRID) {
         val thirdW = size.width / 3f
         val thirdH = size.height / 3f
         for (i in 1..2) {
@@ -420,6 +428,92 @@ fun KineticPreviewStage(
             style = Stroke(width = 3f),
           )
         }
+      } else if (effectivePlatform != SafeZonePlatform.NONE) {
+        // Authentic Social Safe-Zone Overlays (TikTok / Instagram Reels / YouTube Shorts)
+        val dangerFill = Color(0xFFFF3B5C).copy(alpha = 0.22f)
+        val dangerBorder = Color(0xFFFF6B81).copy(alpha = 0.72f)
+        val safeBorder = Color(0xFF3AE8B0).copy(alpha = 0.78f)
+        val uiMockColor = Color.White.copy(alpha = 0.42f)
+
+        val topDangerH =
+          when (effectivePlatform) {
+            SafeZonePlatform.TIKTOK -> size.height * 0.13f
+            SafeZonePlatform.REELS -> size.height * 0.12f
+            SafeZonePlatform.SHORTS -> size.height * 0.11f
+            else -> 0f
+          }
+        val bottomDangerH =
+          when (effectivePlatform) {
+            SafeZonePlatform.TIKTOK -> size.height * 0.23f
+            SafeZonePlatform.REELS -> size.height * 0.24f
+            SafeZonePlatform.SHORTS -> size.height * 0.21f
+            else -> 0f
+          }
+        val rightRailW =
+          when (effectivePlatform) {
+            SafeZonePlatform.TIKTOK -> size.width * 0.17f
+            SafeZonePlatform.REELS -> size.width * 0.16f
+            SafeZonePlatform.SHORTS -> size.width * 0.16f
+            else -> 0f
+          }
+        val rightRailTop = size.height * 0.44f
+
+        // Top UI danger bar (Following/For You/Camera header)
+        drawRect(color = dangerFill, topLeft = Offset.Zero, size = Size(size.width, topDangerH))
+        // Bottom UI danger bar (@handle, description, music marquee)
+        drawRect(
+          color = dangerFill,
+          topLeft = Offset(0f, size.height - bottomDangerH),
+          size = Size(size.width, bottomDangerH),
+        )
+        // Right social action rail (Like, Comment, Bookmark, Share)
+        drawRect(
+          color = dangerFill,
+          topLeft = Offset(size.width - rightRailW, rightRailTop),
+          size = Size(rightRailW, (size.height - bottomDangerH - rightRailTop).coerceAtLeast(0f)),
+        )
+        // Green safe caption frame outline
+        drawRect(
+          color = safeBorder,
+          topLeft = Offset(size.width * 0.05f, topDangerH + 4f),
+          size = Size(size.width - rightRailW - size.width * 0.06f, size.height - topDangerH - bottomDangerH - 8f),
+          style = Stroke(width = 2.2f),
+        )
+        drawLine(
+          color = dangerBorder,
+          start = Offset(0f, topDangerH),
+          end = Offset(size.width, topDangerH),
+          strokeWidth = 1.6f,
+        )
+        drawLine(
+          color = dangerBorder,
+          start = Offset(0f, size.height - bottomDangerH),
+          end = Offset(size.width, size.height - bottomDangerH),
+          strokeWidth = 1.6f,
+        )
+        // Mock action circles on right rail for instant spatial intuition
+        val railCx = size.width - rightRailW * 0.5f
+        val circleR = (rightRailW * 0.22f).coerceIn(6f, 16f)
+        val railSpan = (size.height - bottomDangerH - rightRailTop).coerceAtLeast(60f)
+        for (idx in 0..3) {
+          val cy = rightRailTop + railSpan * (0.16f + idx * 0.22f)
+          drawCircle(color = uiMockColor, radius = circleR, center = Offset(railCx, cy))
+        }
+        // Mock bottom handle + caption bars
+        val barLeft = size.width * 0.06f
+        val barTop = size.height - bottomDangerH + 16f
+        drawRoundRect(
+          color = uiMockColor,
+          topLeft = Offset(barLeft, barTop),
+          size = Size(size.width * 0.34f, 8f),
+          cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f),
+        )
+        drawRoundRect(
+          color = uiMockColor.copy(alpha = 0.28f),
+          topLeft = Offset(barLeft, barTop + 16f),
+          size = Size(size.width * 0.56f, 7f),
+          cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f),
+        )
       }
 
       val shadowFactor =

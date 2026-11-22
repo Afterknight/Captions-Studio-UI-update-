@@ -130,6 +130,9 @@ class VideoExportService(private val context: Context) {
                 shadowMultiplier = preset.shadowRadiusFactor,
                 drawSelectionGuide = false,
               )
+              if (exportPrefs.showWatermark) {
+                renderer.drawWatermark(canvas, width, height)
+              }
             }
           }
 
@@ -203,7 +206,7 @@ class VideoExportService(private val context: Context) {
 
         activeTransformer = transformer
         transformer.start(editedItem, tempOutFile.absolutePath)
-        startProgressPolling(transformer)
+        startProgressPolling(transformer, needsSubjectMask)
       } catch (e: Exception) {
         activeMaskProvider?.release()
         activeMaskProvider = null
@@ -214,7 +217,7 @@ class VideoExportService(private val context: Context) {
     }
   }
 
-  private fun startProgressPolling(transformer: Transformer) {
+  private fun startProgressPolling(transformer: Transformer, hasBehindSubjectMask: Boolean) {
     stopProgressPolling()
     val holder = ProgressHolder()
     val runnable =
@@ -222,10 +225,22 @@ class VideoExportService(private val context: Context) {
         override fun run() {
           val stateCode = transformer.getProgress(holder)
           if (stateCode == Transformer.PROGRESS_STATE_AVAILABLE) {
+            val pct = holder.progress.coerceIn(0, 99)
+            val stage =
+              when {
+                pct < 20 ->
+                  if (hasBehindSubjectMask) "Mapping speaker silhouette & scene cuts…"
+                  else "Initializing hardware video encoder…"
+                pct < 65 ->
+                  if (hasBehindSubjectMask) "Refining hair edges & compositing kinetic type…"
+                  else "Rendering kinetic typography layers…"
+                pct < 92 -> "Syncing audio tracks & mastering frames…"
+                else -> "Finalizing MP4 & verifying playback…"
+              }
             _state.value =
               ExportUiState.Exporting(
-                progressPercent = holder.progress.coerceIn(0, 99),
-                stageLabel = "Rendering kinetic typography & audio...",
+                progressPercent = pct,
+                stageLabel = stage,
               )
           }
           if (stateCode != Transformer.PROGRESS_STATE_NOT_STARTED) {

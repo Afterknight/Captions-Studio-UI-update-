@@ -62,6 +62,49 @@ class SettingsRepository(private val context: Context) {
   val speechLanguageTag: Flow<String> =
     context.studioDataStore.data.map { prefs -> prefs[KEY_SPEECH_LANG] ?: "en-US" }
 
+  val customPresets: Flow<List<com.example.captionstudio.domain.model.PresetDefinition>> =
+    context.studioDataStore.data.map { prefs ->
+      val raw = prefs[KEY_CUSTOM_PRESETS] ?: "[]"
+      runCatching {
+          json.decodeFromString<List<com.example.captionstudio.domain.model.PresetDefinition>>(raw)
+        }
+        .getOrDefault(emptyList())
+    }
+
+  val isCreatorMode: Flow<Boolean> =
+    context.studioDataStore.data.map { prefs -> prefs[KEY_CREATOR_MODE] ?: true }
+
+  suspend fun saveCustomPreset(preset: com.example.captionstudio.domain.model.PresetDefinition) {
+    context.studioDataStore.edit { prefs ->
+      val existing =
+        runCatching {
+            json.decodeFromString<List<com.example.captionstudio.domain.model.PresetDefinition>>(
+              prefs[KEY_CUSTOM_PRESETS] ?: "[]"
+            )
+          }
+          .getOrDefault(emptyList())
+      val updated = (listOf(preset) + existing.filterNot { it.id == preset.id }).take(30)
+      prefs[KEY_CUSTOM_PRESETS] = json.encodeToString(updated)
+    }
+  }
+
+  suspend fun deleteCustomPreset(presetId: String) {
+    context.studioDataStore.edit { prefs ->
+      val existing =
+        runCatching {
+            json.decodeFromString<List<com.example.captionstudio.domain.model.PresetDefinition>>(
+              prefs[KEY_CUSTOM_PRESETS] ?: "[]"
+            )
+          }
+          .getOrDefault(emptyList())
+      prefs[KEY_CUSTOM_PRESETS] = json.encodeToString(existing.filterNot { it.id == presetId })
+    }
+  }
+
+  suspend fun setCreatorMode(enabled: Boolean) {
+    context.studioDataStore.edit { it[KEY_CREATOR_MODE] = enabled }
+  }
+
   suspend fun setGeminiEnabled(enabled: Boolean) {
     context.studioDataStore.edit { it[KEY_GEMINI_ENABLED] = enabled }
   }
@@ -141,5 +184,7 @@ class SettingsRepository(private val context: Context) {
     private val KEY_LAST_STATUS_MSG = stringPreferencesKey("gemini_last_status_msg")
     private val KEY_PREVIEW_QUALITY = stringPreferencesKey("preview_quality_mode")
     private val KEY_SPEECH_LANG = stringPreferencesKey("speech_language_tag")
+    private val KEY_CUSTOM_PRESETS = stringPreferencesKey("custom_cloned_presets")
+    private val KEY_CREATOR_MODE = booleanPreferencesKey("editor_creator_mode")
   }
 }
