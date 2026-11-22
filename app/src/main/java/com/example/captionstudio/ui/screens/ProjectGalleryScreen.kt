@@ -104,6 +104,7 @@ fun ProjectGalleryScreen(
   onCreateProject: suspend (String, Boolean) -> String,
   onRenameProject: (String, String) -> Unit,
   onDeleteProject: (String) -> Unit,
+  onOpenStyleCloner: () -> Unit = {},
   onOpenSettings: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -270,6 +271,7 @@ fun ProjectGalleryScreen(
                     },
                     onBrowseFiles = { documentVideoLauncher.launch(arrayOf("video/*")) },
                     onCreateScript = { showNewProjectDialog = true },
+                    onOpenStyleCloner = onOpenStyleCloner,
                     modifier = Modifier.padding(bottom = 6.dp),
                   )
                 }
@@ -346,7 +348,16 @@ fun ProjectGalleryScreen(
                     label = "gallery_empty_state_transition",
                   ) { state ->
                     when (state) {
-                      GalleryListState.EMPTY_LIBRARY -> GalleryEmptyStateCard()
+                      GalleryListState.EMPTY_LIBRARY ->
+                        GalleryEmptyStateCard(
+                          onLaunchDemoProject = {
+                            scope.launch {
+                              val id = onCreateProject("Creator Demo Reel", true)
+                              onOpenProject(id)
+                            }
+                          },
+                          onOpenStyleCloner = onOpenStyleCloner,
+                        )
                       GalleryListState.NO_SEARCH_MATCHES ->
                         GalleryNoSearchResultsCard(
                           query = searchQuery,

@@ -332,4 +332,146 @@ class CaptionStudioEngineTest {
     assertEquals(2.2f, el.motionSpeed, 0.001f)
     assertEquals(0.25f, el.motionIntensity, 0.001f)
   }
+
+  @Test
+  fun `style deep link codec round-trips custom cloned preset cleanly`() {
+    val original =
+      com.example.captionstudio.domain.model.PresetDefinition(
+        id = "cloned_viral01",
+        name = "VIRAL PUNCH",
+        tagline = "Cloned • anton + Pop",
+        description = "High contrast kinetic style",
+        heavyFontId = "anton",
+        supportingFontId = "plus_jakarta_sans",
+        expressiveFontId = "caveat",
+        primaryColorHex = "#FFFFFF",
+        dominantColorHex = "#FFE14D",
+        expressiveColorHex = "#FF7A2F",
+        dramaticColorHex = "#FF3B30",
+        defaultEntryAnim = com.example.captionstudio.domain.model.EntryAnimationType.FADE_POP,
+        defaultExitAnim = com.example.captionstudio.domain.model.ExitAnimationType.FADE_DROP,
+        defaultEasing = com.example.captionstudio.domain.model.AnimationEasingType.SPRING_OVERSHOOT,
+        entryDurationMs = 135,
+        exitDurationMs = 110,
+        dominantScaleMultiplier = 1.14f,
+        expressiveScaleMultiplier = 1.08f,
+        shadowRadiusFactor = 1.1f,
+        preferredRegions = listOf(SafeRegion.LOWER_CENTER, SafeRegion.CENTER),
+        sampleSentence = "Why do creators win",
+        strokeWidthFactor = 0.085f,
+        strokeColorHex = "#111116",
+        backgroundPillColorHex = "#0E0E14",
+        backgroundPillAlpha = 0.80f,
+        preferBehindSubject = true,
+        preferUppercase = true,
+        isCustomCloned = true,
+      )
+    val link = com.example.captionstudio.presets.StyleDeepLinkCodec.encodeToDeepLink(original)
+    assertTrue("Deep link must use captionstudio://style?d= scheme", link.startsWith("captionstudio://style?d="))
+
+    val decoded = com.example.captionstudio.presets.StyleDeepLinkCodec.decodeFromDeepLink(link)
+    assertTrue("Decoded preset should not be null", decoded != null)
+    assertEquals(original.name, decoded!!.name)
+    assertEquals(original.heavyFontId, decoded.heavyFontId)
+    assertEquals(original.dominantColorHex, decoded.dominantColorHex)
+    assertEquals(original.strokeWidthFactor, decoded.strokeWidthFactor, 0.001f)
+    assertEquals(original.backgroundPillColorHex, decoded.backgroundPillColorHex)
+    assertEquals(true, decoded.preferBehindSubject)
+    assertEquals(true, decoded.isCustomCloned)
+
+    val invalid = com.example.captionstudio.presets.StyleDeepLinkCodec.decodeFromDeepLink("https://invalid.example.com")
+    assertEquals(null, invalid)
+  }
+
+  @Test
+  fun `subject mask processor distinguishes static frames, normal speech, and hard scene cuts`() {
+    val darkFrame = IntArray(256) { 0xFF141820.toInt() }
+    val slightNoiseFrame = IntArray(256) { 0xFF161A22.toInt() }
+    val fastMotionFrame = IntArray(256) { idx -> if (idx % 2 == 0) 0xFF42464E.toInt() else 0xFF141820.toInt() }
+    val sceneCutFrame = IntArray(256) { 0xFFE8EEF5.toInt() }
+
+    val staticSad = com.example.captionstudio.media.SubjectMaskProcessor.frameDifferenceSad(darkFrame, slightNoiseFrame)
+    val motionSad = com.example.captionstudio.media.SubjectMaskProcessor.frameDifferenceSad(darkFrame, fastMotionFrame)
+    val cutSad = com.example.captionstudio.media.SubjectMaskProcessor.frameDifferenceSad(darkFrame, sceneCutFrame)
+
+    assertTrue("Static frame SAD should be < 4.2f, was $staticSad", staticSad < 4.2f)
+    assertTrue("Motion frame SAD should be in 15.5..42.0, was $motionSad", motionSad in 15.5f..42.0f)
+    assertTrue("Scene cut SAD should be >= 42.0f, was $cutSad", cutSad >= 42.0f)
+  }
+
+  @Test
+  fun `reference style cloner synthesizes spring pop, behind-subject depth, and font archetype`() {
+    val obs =
+      listOf(
+        com.example.captionstudio.media.ReferenceStyleCloner.TrackedCaptionObservation(
+          timeMs = 200L,
+          text = "STOP SCROLLING",
+          normalizedCenterX = 0.50f,
+          normalizedCenterY = 0.72f,
+          normalizedHeight = 0.070f,
+          charAspectRatio = 0.40f,
+          wordCount = 2,
+          isAllCaps = true,
+          primaryColorInt = 0xFFFFFFFF.toInt(),
+          accentColorInt = 0xFFFFE14D.toInt(),
+          hasDarkStroke = true,
+          strokeColorInt = 0xFF0A0A0D.toInt(),
+          pillBackgroundColorInt = 0xFF121218.toInt(),
+          fillDensity = 0.38f,
+          isSceneCutFrame = false,
+        ),
+        com.example.captionstudio.media.ReferenceStyleCloner.TrackedCaptionObservation(
+          timeMs = 270L,
+          text = "STOP SCROLLING",
+          normalizedCenterX = 0.50f,
+          normalizedCenterY = 0.72f,
+          normalizedHeight = 0.088f, // Spring overshoot peak
+          charAspectRatio = 0.40f,
+          wordCount = 2,
+          isAllCaps = true,
+          primaryColorInt = 0xFFFFFFFF.toInt(),
+          accentColorInt = 0xFFFFE14D.toInt(),
+          hasDarkStroke = true,
+          strokeColorInt = 0xFF0A0A0D.toInt(),
+          pillBackgroundColorInt = 0xFF121218.toInt(),
+          fillDensity = 0.38f,
+          isSceneCutFrame = false,
+        ),
+        com.example.captionstudio.media.ReferenceStyleCloner.TrackedCaptionObservation(
+          timeMs = 340L,
+          text = "STOP SCROLLING",
+          normalizedCenterX = 0.50f,
+          normalizedCenterY = 0.72f,
+          normalizedHeight = 0.080f, // Settles back down -> overshoot detected
+          charAspectRatio = 0.40f,
+          wordCount = 2,
+          isAllCaps = true,
+          primaryColorInt = 0xFFFFFFFF.toInt(),
+          accentColorInt = 0xFFFFE14D.toInt(),
+          hasDarkStroke = true,
+          strokeColorInt = 0xFF0A0A0D.toInt(),
+          pillBackgroundColorInt = 0xFF121218.toInt(),
+          fillDensity = 0.38f,
+          isSceneCutFrame = false,
+        ),
+      )
+
+    val report =
+      com.example.captionstudio.media.ReferenceStyleCloner.synthesizePresetFromObservations(
+        observations = obs,
+        framesScanned = 36,
+        sceneCuts = 2,
+        behindSubjectDetected = true,
+        customStyleName = "MY VIRAL HOOK",
+      )
+
+    assertEquals("MY VIRAL HOOK", report.preset.name)
+    assertEquals(com.example.captionstudio.domain.model.EntryAnimationType.FADE_POP, report.preset.defaultEntryAnim)
+    assertEquals(com.example.captionstudio.domain.model.AnimationEasingType.SPRING_OVERSHOOT, report.preset.defaultEasing)
+    assertEquals("anton", report.preset.heavyFontId)
+    assertTrue(report.alternativeHeavyFontIds.size >= 3)
+    assertEquals(true, report.preset.preferBehindSubject)
+    assertTrue(report.preset.strokeWidthFactor > 0f)
+    assertTrue(report.preset.backgroundPillColorHex != null)
+  }
 }

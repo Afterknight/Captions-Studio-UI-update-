@@ -66,11 +66,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
+import androidx.compose.foundation.Canvas
+import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,7 +86,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -94,6 +104,11 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ProjectSortOption
+import com.example.captionstudio.domain.model.SafeRegion
+import com.example.captionstudio.domain.model.VideoAnalysisReport
+import com.example.captionstudio.engine.KineticCompositionRenderer
+import com.example.captionstudio.engine.LocalCompositionEngine
+import com.example.captionstudio.presets.PresetCatalog
 import com.example.captionstudio.ui.components.ProjectVideoThumbnail
 import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.studioPressScale
@@ -108,6 +123,7 @@ import com.example.ui.theme.StudioError
 import com.example.ui.theme.StudioHairline
 import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
+import com.example.ui.theme.StudioSuccess
 import com.example.ui.theme.StudioTextMuted
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
@@ -328,6 +344,7 @@ internal fun GalleryHeroCreateCard(
   onImportVideo: () -> Unit,
   onBrowseFiles: () -> Unit,
   onCreateScript: () -> Unit,
+  onOpenStyleCloner: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   StudioGlassCard(
@@ -345,7 +362,7 @@ internal fun GalleryHeroCreateCard(
             )
           )
           .padding(18.dp),
-      verticalArrangement = Arrangement.spacedBy(14.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
@@ -378,6 +395,13 @@ internal fun GalleryHeroCreateCard(
         modifier = Modifier.testTag("import_video_button"),
       )
 
+      // Viral On-Device Reference Video Style Cloner CTA
+      CloneStyleBannerPill(
+        enabled = !isBusy,
+        onClick = onOpenStyleCloner,
+        modifier = Modifier.testTag("clone_style_hero_button"),
+      )
+
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -397,6 +421,69 @@ internal fun GalleryHeroCreateCard(
           modifier = Modifier.weight(1f).testTag("new_project_button"),
         )
       }
+    }
+  }
+}
+
+@Composable
+private fun CloneStyleBannerPill(
+  enabled: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val interactionSource = remember { MutableInteractionSource() }
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .height(48.dp)
+        .studioPressScale(enabled = enabled, interactionSource = interactionSource)
+        .clip(CircleShape)
+        .background(
+          Brush.horizontalGradient(
+            listOf(StudioCoralContainer.copy(alpha = 0.55f), StudioObsidian.copy(alpha = 0.85f))
+          )
+        )
+        .border(1.dp, StudioCoral.copy(alpha = 0.48f), CircleShape)
+        .clickable(
+          enabled = enabled,
+          interactionSource = interactionSource,
+          indication = ripple(bounded = true, color = StudioCoralLight),
+          onClick = onClick,
+        )
+        .padding(horizontal = 16.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Icon(
+        imageVector = Icons.Rounded.AutoFixHigh,
+        contentDescription = null,
+        tint = StudioCoralLight,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(Modifier.width(9.dp))
+      Text(
+        text = stringResource(R.string.gallery_clone_style_title),
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = StudioTextPrimary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    Surface(
+      color = StudioCoral.copy(alpha = 0.24f),
+      shape = CircleShape,
+      modifier = Modifier.border(1.dp, StudioCoral.copy(alpha = 0.55f), CircleShape),
+    ) {
+      Text(
+        text = stringResource(R.string.gallery_clone_style_badge),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = StudioCoralLight,
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+      )
     }
   }
 }
@@ -590,20 +677,48 @@ internal fun ProjectGalleryCard(
               )
         )
 
-        if (project.videoUriString.isBlank()) {
-          Surface(
-            color = StudioObsidian.copy(alpha = 0.72f),
-            shape = CircleShape,
-            modifier =
-              Modifier.align(Alignment.TopStart)
-                .padding(8.dp)
-                .border(1.dp, StudioHairlineStrong, CircleShape),
+        // Zeigarnik Draft Status Badge
+        val hasBehindSubject =
+          remember(project.compositions) { project.compositions.any { it.hasBehindSubjectElements() } }
+        val (badgeLabel, badgeTint) =
+          when {
+            project.videoUriString.isBlank() ->
+              stringResource(R.string.gallery_badge_script) to StudioCoralLight
+            hasBehindSubject ->
+              stringResource(R.string.gallery_badge_behind_depth) to StudioCoralLight
+            project.compositions.isNotEmpty() ->
+              stringResource(R.string.gallery_badge_ready_export) to StudioSuccess
+            else ->
+              stringResource(R.string.gallery_badge_tap_style) to StudioCoral
+          }
+
+        Surface(
+          color = StudioObsidian.copy(alpha = 0.78f),
+          shape = CircleShape,
+          modifier =
+            Modifier.align(Alignment.TopStart)
+              .padding(8.dp)
+              .border(1.dp, badgeTint.copy(alpha = 0.45f), CircleShape),
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
           ) {
+            if (hasBehindSubject && project.videoUriString.isNotBlank()) {
+              Icon(
+                imageVector = Icons.Rounded.Layers,
+                contentDescription = null,
+                tint = badgeTint,
+                modifier = Modifier.size(11.dp),
+              )
+            }
             Text(
-              text = stringResource(R.string.gallery_badge_script),
+              text = badgeLabel,
               style = MaterialTheme.typography.labelSmall,
-              color = StudioCoralLight,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+              fontWeight = FontWeight.Medium,
+              color = badgeTint,
+              maxLines = 1,
             )
           }
         }
@@ -707,42 +822,190 @@ internal fun ProjectGalleryCard(
 }
 
 @Composable
-internal fun GalleryEmptyStateCard(modifier: Modifier = Modifier) {
+internal fun GalleryEmptyStateCard(
+  onLaunchDemoProject: () -> Unit = {},
+  onOpenStyleCloner: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  val context = LocalContext.current
+  val renderer = remember(context) { KineticCompositionRenderer(context) }
+  val demoPresets = remember { listOf("editorial", "impact", "neon") }
+  var selectedDemoPresetId by remember { mutableStateOf("editorial") }
+  var loopPlayheadMs by remember { mutableLongStateOf(650L) }
+
+  LaunchedEffect(Unit) {
+    val startNs = System.nanoTime()
+    while (true) {
+      withFrameMillis {
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+        loopPlayheadMs = elapsedMs % 2800L
+      }
+    }
+  }
+
+  val demoComp =
+    remember(selectedDemoPresetId) {
+      val preset = PresetCatalog.findById(selectedDemoPresetId)
+      LocalCompositionEngine.generateCompositions(
+        transcript = "Why do many creators add crazy text",
+        wordTimings = emptyList(),
+        totalDurationMs = 2800L,
+        preset = preset,
+        analysisReport = VideoAnalysisReport(),
+      ).firstOrNull()?.copy(
+        startMs = 0L,
+        endMs = 2800L,
+        anchorXFraction = 0.5f,
+        anchorYFraction = 0.52f,
+        region = SafeRegion.CENTER,
+      )
+    }
+
   StudioGlassCard(
     modifier = modifier.fillMaxWidth(),
-    cornerRadius = 22.dp,
+    cornerRadius = 24.dp,
+    borderColor = StudioCoral.copy(alpha = 0.35f),
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(20.dp),
-      verticalAlignment = Alignment.CenterVertically,
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = stringResource(R.string.gallery_onboarding_title),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = StudioTextPrimary,
+          )
+          Spacer(Modifier.height(2.dp))
+          Text(
+            text = stringResource(R.string.gallery_onboarding_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioTextSecondary,
+          )
+        }
+        Surface(
+          color = StudioCoralContainer.copy(alpha = 0.65f),
+          shape = CircleShape,
+        ) {
+          Text(
+            text = "LIVE",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = StudioCoralLight,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+          )
+        }
+      }
+
+      // Live 60fps Interactive Kinetic Stage Preview (<30s Aha Moment)
       Box(
         modifier =
-          Modifier.size(54.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(StudioCoral.copy(alpha = 0.14f))
-            .border(1.dp, StudioCoral.copy(alpha = 0.25f), RoundedCornerShape(15.dp)),
-        contentAlignment = Alignment.Center,
+          Modifier.fillMaxWidth()
+            .height(148.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+              Brush.radialGradient(
+                colors = listOf(Color(0xFF282034), Color(0xFF13131A), Color(0xFF0A0A0E))
+              )
+            )
+            .border(1.dp, StudioHairlineStrong, RoundedCornerShape(18.dp)),
       ) {
-        Icon(
-          imageVector = Icons.Rounded.Movie,
-          contentDescription = null,
-          tint = StudioCoral,
-          modifier = Modifier.size(24.dp),
-        )
+        if (demoComp != null) {
+          Canvas(modifier = Modifier.fillMaxSize()) {
+            drawIntoCanvas { canvas ->
+              renderer.drawAtTime(
+                canvas = canvas.nativeCanvas,
+                canvasWidth = size.width.toInt().coerceAtLeast(1),
+                canvasHeight = size.height.toInt().coerceAtLeast(1),
+                compositions = listOf(demoComp),
+                positionMs = loopPlayheadMs,
+              )
+            }
+          }
+        }
       }
-      Spacer(Modifier.width(16.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = stringResource(R.string.gallery_empty_title),
-          style = MaterialTheme.typography.titleMedium,
-          color = StudioTextPrimary,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-          text = stringResource(R.string.gallery_empty_subtitle),
-          style = MaterialTheme.typography.bodyMedium,
-          color = StudioTextSecondary,
+
+      // 3 Tappable Instant Style Chips
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        demoPresets.forEach { presetId ->
+          val preset = remember(presetId) { PresetCatalog.findById(presetId) }
+          val isSelected = selectedDemoPresetId == presetId
+          Surface(
+            color = if (isSelected) StudioCoralContainer else StudioElevated,
+            shape = CircleShape,
+            modifier =
+              Modifier.weight(1f)
+                .height(48.dp)
+                .border(
+                  1.dp,
+                  if (isSelected) StudioCoral else StudioHairlineStrong,
+                  CircleShape,
+                )
+                .clickable { selectedDemoPresetId = presetId }
+                .testTag("onboarding_style_chip_$presetId"),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Text(
+                text = preset.name,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) StudioCoralLight else StudioTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Button(
+          onClick = onLaunchDemoProject,
+          shape = CircleShape,
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = StudioCoral,
+              contentColor = Color.White,
+            ),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+          modifier =
+            Modifier.weight(1.2f)
+              .height(48.dp)
+              .testTag("onboarding_launch_demo_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.PlayArrow,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(Modifier.width(6.dp))
+          Text(
+            text = stringResource(R.string.gallery_onboarding_launch_demo),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+
+        SecondaryActionPill(
+          icon = Icons.Rounded.AutoFixHigh,
+          label = stringResource(R.string.onboarding_clone_cta),
+          enabled = true,
+          onClick = onOpenStyleCloner,
+          modifier = Modifier.weight(0.9f).testTag("onboarding_clone_style_button"),
         )
       }
     }

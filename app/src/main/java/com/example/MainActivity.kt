@@ -1,6 +1,8 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -31,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,11 +50,13 @@ import com.example.captionstudio.ui.screens.EditorScreen
 import com.example.captionstudio.ui.screens.ExportScreen
 import com.example.captionstudio.ui.screens.PresetsScreen
 import com.example.captionstudio.ui.screens.ProjectGalleryScreen
+import com.example.captionstudio.ui.screens.StyleClonerScreen
 import com.example.captionstudio.ui.screens.TypographyScreen
 import com.example.ui.theme.CaptionStudioTheme
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioObsidian
 import com.example.ui.theme.StudioTextSecondary
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.Serializable
 
 private val StudioEmphasizedEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
@@ -70,8 +75,15 @@ private val StudioEmphasizedEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 @Serializable data class ExportRoute(val projectId: String)
 
+@Serializable object StyleClonerRoute
+
 @Composable
-fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
+fun CaptionStudioApp(
+  pendingDeepLink: String? = null,
+  onDeepLinkConsumed: () -> Unit = {},
+  studioViewModel: StudioViewModel = viewModel(),
+) {
+  val context = LocalContext.current
   val navController = rememberNavController()
 
   val projects by studioViewModel.projects.collectAsStateWithLifecycle()
@@ -89,6 +101,9 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
   val isBusy by studioViewModel.isBusy.collectAsStateWithLifecycle()
   val statusBanner by studioViewModel.statusBanner.collectAsStateWithLifecycle()
   val showSafeGuides by studioViewModel.showSafeGuides.collectAsStateWithLifecycle()
+  val safeZonePlatform by studioViewModel.safeZonePlatform.collectAsStateWithLifecycle()
+  val customPresets by studioViewModel.customPresets.collectAsStateWithLifecycle()
+  val isCreatorMode by studioViewModel.isCreatorMode.collectAsStateWithLifecycle()
   val geminiSettings by studioViewModel.geminiSettings.collectAsStateWithLifecycle()
   val previewQuality by studioViewModel.previewQualityMode.collectAsStateWithLifecycle()
   val speechLanguage by studioViewModel.speechLanguageTag.collectAsStateWithLifecycle()
@@ -100,6 +115,18 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
   val fontsVersion by studioViewModel.fontsVersion.collectAsStateWithLifecycle()
+
+  LaunchedEffect(pendingDeepLink) {
+    if (!pendingDeepLink.isNullOrBlank()) {
+      val imported = studioViewModel.importStyleFromDeepLink(pendingDeepLink)
+      Toast.makeText(
+        context,
+        if (imported) "Caption style imported & ready!" else "Could not read style link.",
+        Toast.LENGTH_SHORT,
+      ).show()
+      onDeepLinkConsumed()
+    }
+  }
 
   val navAnimDuration = 300
 
@@ -187,6 +214,7 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
         },
         onRenameProject = studioViewModel::renameProject,
         onDeleteProject = studioViewModel::deleteProject,
+        onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
         onOpenSettings = { navController.navigate(AiSettingsRoute) },
       )
     }
@@ -301,6 +329,17 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
             speechLanguageTag = speechLanguage,
             voicePackStatuses = voicePackStatuses,
             onDownloadVoicePackForLanguage = studioViewModel::downloadOfflineVoicePackForLanguage,
+            isCreatorMode = isCreatorMode,
+            onSetCreatorMode = studioViewModel::setCreatorMode,
+            customPresets = customPresets,
+            safeZonePlatform = safeZonePlatform,
+            onCycleSafeZone = studioViewModel::cycleSafeZonePlatform,
+            onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
+            onScaleAllText = studioViewModel::scaleAllCompositionsText,
+            onSetAllHeight = studioViewModel::setAllCompositionsHeight,
+            onSetAllEnergy = studioViewModel::setAllCompositionsEnergy,
+            onQuickEditWord = studioViewModel::quickEditWord,
+            onDeleteWord = studioViewModel::deleteWordAt,
             onOpenPresets = { navController.navigate(PresetsRoute(route.projectId)) },
             onOpenTypography = { navController.navigate(TypographyRoute(route.projectId)) },
             onOpenAnimation = { navController.navigate(AnimationRoute(route.projectId)) },
@@ -318,7 +357,22 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
     composable<PresetsRoute> {
       PresetsScreen(
         activePresetId = activeProject?.presetId ?: "editorial",
+        customPresets = customPresets,
         onApplyPreset = studioViewModel::applyPreset,
+        onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
+        onImportStyleLink = studioViewModel::importStyleFromDeepLink,
+        onDeleteCustomPreset = studioViewModel::deleteCustomPreset,
+        onBack = { navController.popBackStack() },
+      )
+    }
+
+    composable<StyleClonerRoute> {
+      StyleClonerScreen(
+        hasActiveProject = activeProject != null,
+        onSaveAndApplyPreset = { preset, apply ->
+          studioViewModel.saveCustomPreset(preset, applyToActiveProject = apply)
+          navController.popBackStack()
+        },
         onBack = { navController.popBackStack() },
       )
     }
@@ -385,6 +439,12 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
         onUpdatePreferences = studioViewModel::updateExportPreferences,
         onStartExport = studioViewModel::startExport,
         onCancelExport = studioViewModel::cancelExport,
+        onSaveCurrentStyleAsPreset = {
+          val presetName = activeProject?.title?.take(18)?.ifBlank { "MY LOOK" } ?: "MY LOOK"
+          studioViewModel.buildCurrentProjectPreset(presetName)?.let { built ->
+            studioViewModel.saveCustomPreset(built, applyToActiveProject = false)
+          }
+        },
         onBack = { navController.popBackStack() },
       )
     }
@@ -416,12 +476,36 @@ private fun EditorWorkspaceLoadingPlaceholder() {
 }
 
 class MainActivity : ComponentActivity() {
+  private val pendingDeepLinkFlow = MutableStateFlow<String?>(null)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    captureStyleDeepLink(intent)
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
     )
-    setContent { CaptionStudioTheme { CaptionStudioApp() } }
+    setContent {
+      val deepLink by pendingDeepLinkFlow.collectAsStateWithLifecycle()
+      CaptionStudioTheme {
+        CaptionStudioApp(
+          pendingDeepLink = deepLink,
+          onDeepLinkConsumed = { pendingDeepLinkFlow.value = null },
+        )
+      }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    captureStyleDeepLink(intent)
+  }
+
+  private fun captureStyleDeepLink(intent: Intent?) {
+    val data = intent?.dataString ?: return
+    if (data.startsWith("captionstudio://style")) {
+      pendingDeepLinkFlow.value = data
+    }
   }
 }

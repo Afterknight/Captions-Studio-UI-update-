@@ -105,8 +105,11 @@ import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.GeminiSettings
+import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.SafeRegion
+import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.media.AutoTranscribeUiState
 import com.example.captionstudio.media.OfflineVoicePackStatus
 import com.example.captionstudio.media.SpeechRecognitionState
@@ -114,6 +117,7 @@ import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.ui.AiConfirmationAction
 import com.example.captionstudio.ui.PendingAiConfirmation
+import com.example.captionstudio.ui.components.CreatorModeQuickPanel
 import com.example.captionstudio.ui.components.KineticPreviewStage
 import com.example.captionstudio.ui.components.StudioCircleIconButton
 import com.example.captionstudio.ui.components.StudioCoralPillButton
@@ -191,6 +195,17 @@ fun EditorScreen(
   speechLanguageTag: String = "en-US",
   voicePackStatuses: List<OfflineVoicePackStatus> = emptyList(),
   onDownloadVoicePackForLanguage: (String) -> Unit = {},
+  isCreatorMode: Boolean = true,
+  onSetCreatorMode: (Boolean) -> Unit = {},
+  customPresets: List<PresetDefinition> = emptyList(),
+  safeZonePlatform: SafeZonePlatform = SafeZonePlatform.NONE,
+  onCycleSafeZone: () -> Unit = {},
+  onOpenStyleCloner: () -> Unit = {},
+  onScaleAllText: (Float) -> Unit = {},
+  onSetAllHeight: (Float) -> Unit = {},
+  onSetAllEnergy: (Float) -> Unit = {},
+  onQuickEditWord: (Int, String, HierarchyLevel, Boolean) -> Unit = { _, _, _, _ -> },
+  onDeleteWord: (Int) -> Unit = {},
   onOpenPresets: () -> Unit,
   onOpenTypography: () -> Unit,
   onOpenAnimation: () -> Unit,
@@ -325,6 +340,7 @@ fun EditorScreen(
             playbackSpeed = playbackSpeed,
             previewQuality = previewQualityMode,
             showSafeGuides = showSafeGuides,
+            safeZonePlatform = safeZonePlatform,
             onPlayheadUpdate = onPlayheadUpdate,
             onPlayingChanged = { isPlaying = it },
             onDragCompositionAnchor = { id, ax, ay ->
@@ -429,12 +445,45 @@ fun EditorScreen(
               onClick = onOpenAiSettings,
               modifier = Modifier.testTag("open_ai_settings_button"),
             )
-            StageOverlayIconPill(
-              icon = Icons.Filled.GridOn,
-              contentDescription = "Toggle safe guides",
-              tint = if (showSafeGuides) StudioCoralLight else Color.White,
-              onClick = onToggleSafeGuides,
-            )
+            Surface(
+              color = Color.Black.copy(alpha = 0.56f),
+              shape = CircleShape,
+              modifier =
+                Modifier.height(34.dp)
+                  .border(
+                    1.dp,
+                    if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoral.copy(alpha = 0.65f)
+                    else StudioHairline,
+                    CircleShape,
+                  )
+                  .clickable {
+                    onCycleSafeZone()
+                  }
+                  .testTag("safe_zone_cycle_button"),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = if (safeZonePlatform != SafeZonePlatform.NONE) 9.dp else 8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.GridOn,
+                  contentDescription = "Cycle safe-zone overlays",
+                  tint =
+                    if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoralLight
+                    else Color.White,
+                  modifier = Modifier.size(15.dp),
+                )
+                if (safeZonePlatform != SafeZonePlatform.NONE) {
+                  Text(
+                    text = safeZonePlatform.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StudioCoralLight,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+              }
+            }
             StageOverlayIconPill(
               icon = Icons.Filled.Fullscreen,
               contentDescription = "Fullscreen preview",
@@ -552,43 +601,146 @@ fun EditorScreen(
             }
           }
 
-          // Four Signature Apple-Minimal Tool Tiles: Style | Theme | Font | Timing
+          // Progressive-Disclosure Mode Switcher: Creator (Fast) | Pro (Studio)
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
-            EditorToolTile(
-              label = EditorTool.STYLE.label,
-              selected = activeTool == EditorTool.STYLE,
-              glyphText = "TT",
-              onClick = { activeTool = EditorTool.STYLE },
-              modifier = Modifier.weight(1f).testTag(EditorTool.STYLE.tag),
-            )
-            EditorToolTile(
-              label = EditorTool.THEME.label,
-              selected = activeTool == EditorTool.THEME,
-              icon = Icons.Outlined.Palette,
-              onClick = { activeTool = EditorTool.THEME },
-              modifier = Modifier.weight(1f).testTag(EditorTool.THEME.tag),
-            )
-            EditorToolTile(
-              label = EditorTool.FONT.label,
-              selected = activeTool == EditorTool.FONT,
-              glyphText = "Aa",
-              onClick = { activeTool = EditorTool.FONT },
-              modifier = Modifier.weight(1f).testTag(EditorTool.FONT.tag),
-            )
-            EditorToolTile(
-              label = EditorTool.TIMING.label,
-              selected = activeTool == EditorTool.TIMING,
-              icon = Icons.Rounded.Tune,
-              onClick = { activeTool = EditorTool.TIMING },
-              modifier = Modifier.weight(1f).testTag(EditorTool.TIMING.tag),
-            )
+            Row(
+              modifier =
+                Modifier.clip(CircleShape)
+                  .background(StudioCard)
+                  .border(1.dp, StudioHairlineStrong, CircleShape)
+                  .padding(3.dp),
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Surface(
+                color = if (isCreatorMode) StudioCoral else Color.Transparent,
+                shape = CircleShape,
+                modifier =
+                  Modifier.clip(CircleShape)
+                    .clickable { onSetCreatorMode(true) }
+                    .testTag("editor_mode_creator"),
+              ) {
+                Text(
+                  text = "Creator",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = if (isCreatorMode) Color.White else StudioTextSecondary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                )
+              }
+              Surface(
+                color = if (!isCreatorMode) StudioCoral else Color.Transparent,
+                shape = CircleShape,
+                modifier =
+                  Modifier.clip(CircleShape)
+                    .clickable { onSetCreatorMode(false) }
+                    .testTag("editor_mode_pro"),
+              ) {
+                Text(
+                  text = "Pro Studio",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = if (!isCreatorMode) Color.White else StudioTextSecondary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                )
+              }
+            }
+
+            Surface(
+              color = StudioCoralContainer.copy(alpha = 0.55f),
+              shape = CircleShape,
+              modifier =
+                Modifier.clip(CircleShape)
+                  .border(1.dp, StudioCoral.copy(alpha = 0.45f), CircleShape)
+                  .clickable(onClick = onOpenStyleCloner)
+                  .testTag("editor_clone_reel_button"),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.AutoAwesome,
+                  contentDescription = null,
+                  tint = StudioCoralLight,
+                  modifier = Modifier.size(14.dp),
+                )
+                Text(
+                  text = "Clone Reel",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = StudioCoralLight,
+                )
+              }
+            }
           }
 
-          // Active Tool Workspace Content with silky spring/fade transitions
-          AnimatedContent(
+          if (isCreatorMode) {
+            CreatorModeQuickPanel(
+              project = project,
+              activeComp = activeComp,
+              playheadMs = playheadMs,
+              customPresets = customPresets,
+              safeZonePlatform = safeZonePlatform,
+              isBusy = isBusy,
+              onApplyPreset = onApplyPreset,
+              onOpenStyleCloner = onOpenStyleCloner,
+              onOpenAllPresets = onOpenPresets,
+              onScaleAllText = onScaleAllText,
+              onSetAllHeight = onSetAllHeight,
+              onSetAllEnergy = onSetAllEnergy,
+              onCycleSafeZone = onCycleSafeZone,
+              onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
+              onAutoTranscribe = { onAutoTranscribeVideo(false) },
+              onWordClickSeek = { ms ->
+                isPlaying = false
+                onPlayheadUpdate(ms)
+              },
+              onWordQuickEdit = onQuickEditWord,
+              onWordDelete = onDeleteWord,
+            )
+          } else {
+            // Four Signature Apple-Minimal Tool Tiles: Style | Theme | Font | Timing
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              EditorToolTile(
+                label = EditorTool.STYLE.label,
+                selected = activeTool == EditorTool.STYLE,
+                glyphText = "TT",
+                onClick = { activeTool = EditorTool.STYLE },
+                modifier = Modifier.weight(1f).testTag(EditorTool.STYLE.tag),
+              )
+              EditorToolTile(
+                label = EditorTool.THEME.label,
+                selected = activeTool == EditorTool.THEME,
+                icon = Icons.Outlined.Palette,
+                onClick = { activeTool = EditorTool.THEME },
+                modifier = Modifier.weight(1f).testTag(EditorTool.THEME.tag),
+              )
+              EditorToolTile(
+                label = EditorTool.FONT.label,
+                selected = activeTool == EditorTool.FONT,
+                glyphText = "Aa",
+                onClick = { activeTool = EditorTool.FONT },
+                modifier = Modifier.weight(1f).testTag(EditorTool.FONT.tag),
+              )
+              EditorToolTile(
+                label = EditorTool.TIMING.label,
+                selected = activeTool == EditorTool.TIMING,
+                icon = Icons.Rounded.Tune,
+                onClick = { activeTool = EditorTool.TIMING },
+                modifier = Modifier.weight(1f).testTag(EditorTool.TIMING.tag),
+              )
+            }
+
+            // Active Tool Workspace Content with silky spring/fade transitions
+            AnimatedContent(
             targetState = activeTool,
             transitionSpec = {
               (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
@@ -755,6 +907,7 @@ fun EditorScreen(
                   onOpenAnimationStudio = onOpenAnimation,
                   onOpenPresets = onOpenPresets,
                 )
+              }
             }
           }
         }
@@ -835,6 +988,7 @@ fun EditorScreen(
             playbackSpeed = playbackSpeed,
             previewQuality = previewQualityMode,
             showSafeGuides = showSafeGuides,
+            safeZonePlatform = safeZonePlatform,
             onPlayheadUpdate = onPlayheadUpdate,
             onPlayingChanged = { isPlaying = it },
             onDragCompositionAnchor = { id, ax, ay ->

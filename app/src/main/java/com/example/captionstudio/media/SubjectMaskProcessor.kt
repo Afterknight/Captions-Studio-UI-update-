@@ -272,7 +272,7 @@ object SubjectMaskProcessor {
     val height: Int,
   )
 
-  private data class RefinedMaskOutput(
+  internal data class RefinedMaskOutput(
     val bitmap: Bitmap,
     val probs: FloatArray,
   )
