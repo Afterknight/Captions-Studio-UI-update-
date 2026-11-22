@@ -40,7 +40,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.ui.StudioViewModel
 import com.example.captionstudio.ui.screens.AiSettingsScreen
 import com.example.captionstudio.ui.screens.AnimationScreen
@@ -100,6 +99,7 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
   val hasSavedKey by studioViewModel.hasSavedApiKey.collectAsStateWithLifecycle()
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
+  val fontsVersion by studioViewModel.fontsVersion.collectAsStateWithLifecycle()
 
   val navAnimDuration = 300
 
@@ -291,14 +291,10 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
             onDeleteComposition = studioViewModel::deleteComposition,
             onAddCustomElement = studioViewModel::addCustomElement,
             onUpdateElementText = studioViewModel::updateElementText,
-            onQuickColorElement = { compId, elId, hex ->
-              studioViewModel.applyElementStyle(
-                compId = compId,
-                elementId = elId,
-                scope = ApplyScope.SINGLE_ELEMENT,
-                colorHex = hex,
-              )
-            },
+            onDeleteElement = studioViewModel::deleteElement,
+            onPatchElementStyle = studioViewModel::updateElementStyle,
+            onResetElementStyle = studioViewModel::resetElementStyle,
+            fontsVersion = fontsVersion,
             onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
             onApplyPreset = studioViewModel::applyPreset,
             onApplyPairing = studioViewModel::applyCuratedPairing,
@@ -332,7 +328,15 @@ fun CaptionStudioApp(studioViewModel: StudioViewModel = viewModel()) {
         project = activeProject,
         selectedCompositionId = selectedCompId,
         selectedElementId = selectedElId,
-        onApplyStyle = studioViewModel::applyElementStyle,
+        fontsVersion = fontsVersion,
+        canUndo = canUndo,
+        onUndo = studioViewModel::undo,
+        onSelectElement = studioViewModel::selectElement,
+        onUpdateElementText = studioViewModel::updateElementText,
+        onDeleteElement = studioViewModel::deleteElement,
+        onPatchStyle = studioViewModel::updateElementStyle,
+        onResetElementStyle = studioViewModel::resetElementStyle,
+        onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
         onApplyPairing = studioViewModel::applyCuratedPairing,
         onDownloadFont = studioViewModel::downloadFontFamily,
         onBack = { navController.popBackStack() },

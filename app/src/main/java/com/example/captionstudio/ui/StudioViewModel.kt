@@ -18,6 +18,7 @@ import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.ConnectionStatus
 import com.example.captionstudio.domain.model.DepthLayer
+import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.EntryAnimationType
 import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.ExportPreferences
@@ -199,6 +200,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private val _transcribedSegments = MutableStateFlow<List<VoskTextSegment>>(emptyList())
   val transcribedSegments: StateFlow<List<VoskTextSegment>> = _transcribedSegments.asStateFlow()
+
+  private val _fontsVersion = MutableStateFlow(0)
+  val fontsVersion: StateFlow<Int> = _fontsVersion.asStateFlow()
 
   init {
     refreshVoicePackStatuses()
@@ -1078,6 +1082,190 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     commitMutation(project.copy(compositions = updated))
   }
 
+  fun deleteElement(compId: String, elementId: String) {
+    val project = _activeProject.value ?: return
+    var nextSelectedEl: String? = null
+    val updated =
+      project.compositions.map { comp ->
+        if (comp.id != compId || comp.elements.size <= 1) {
+          comp
+        } else {
+          val remaining = comp.elements.filterNot { it.id == elementId }
+          nextSelectedEl = remaining.firstOrNull()?.id
+          comp.copy(
+            elements = remaining,
+            originalText = remaining.joinToString(" ") { it.text },
+          )
+        }
+      }
+    commitMutation(project.copy(compositions = updated))
+    if (nextSelectedEl != null) {
+      _selectedElementId.value = nextSelectedEl
+    }
+  }
+
+  fun updateElementStyle(
+    compId: String,
+    elementId: String,
+    scope: ApplyScope,
+    patch: ElementStylePatch,
+    recordHistory: Boolean = true,
+  ) {
+    val project = _activeProject.value ?: return
+    val updatedComps =
+      project.compositions.map { comp ->
+        val matchesComp = scope == ApplyScope.ALL_COMPOSITIONS || comp.id == compId
+        if (!matchesComp) {
+          comp
+        } else {
+          val newElements =
+            comp.elements.map { el ->
+              val matchesEl = scope != ApplyScope.SINGLE_ELEMENT || el.id == elementId
+              if (!matchesEl) el
+              else {
+                el.copy(
+                  fontFamilyId = patch.fontFamilyId ?: el.fontFamilyId,
+                  fontWeight = (patch.fontWeight ?: el.fontWeight).coerceIn(300, 900),
+                  isItalic = patch.isItalic ?: el.isItalic,
+                  isUnderlined = patch.isUnderlined ?: el.isUnderlined,
+                  uppercase = patch.uppercase ?: el.uppercase,
+                  fontSizeSp = (patch.fontSizeSp ?: el.fontSizeSp).coerceIn(12f, 68f),
+                  colorHex = patch.colorHex ?: el.colorHex,
+                  alignment = patch.alignment ?: el.alignment,
+                  letterSpacingEm = (patch.letterSpacingEm ?: el.letterSpacingEm).coerceIn(-0.10f, 0.40f),
+                  lineHeightMultiplier =
+                    (patch.lineHeightMultiplier ?: el.lineHeightMultiplier).coerceIn(0.80f, 1.80f),
+                  opacity = (patch.opacity ?: el.opacity).coerceIn(0.10f, 1.0f),
+                  rotationDeg = (patch.rotationDeg ?: el.rotationDeg).coerceIn(-25f, 25f),
+                  offsetXEm = (patch.offsetXEm ?: el.offsetXEm).coerceIn(-0.6f, 0.6f),
+                  offsetYEm = (patch.offsetYEm ?: el.offsetYEm).coerceIn(-0.6f, 0.6f),
+                  strokeWidthFactor = (patch.strokeWidthFactor ?: el.strokeWidthFactor).coerceIn(0f, 10f),
+                  strokeColorHex = patch.strokeColorHex ?: el.strokeColorHex,
+                  glowColorHex =
+                    when {
+                      patch.clearGlow -> null
+                      patch.glowColorHex != null -> patch.glowColorHex
+                      else -> el.glowColorHex
+                    },
+                  glowIntensity = (patch.glowIntensity ?: el.glowIntensity).coerceIn(0.25f, 2.2f),
+                  shadowEnabled = patch.shadowEnabled ?: el.shadowEnabled,
+                  shadowIntensity = (patch.shadowIntensity ?: el.shadowIntensity).coerceIn(0f, 2.2f),
+                  shadowColorHex = patch.shadowColorHex ?: el.shadowColorHex,
+                  backgroundColorHex =
+                    when {
+                      patch.clearBackground -> null
+                      patch.backgroundColorHex != null -> patch.backgroundColorHex
+                      else -> el.backgroundColorHex
+                    },
+                  backgroundAlpha = (patch.backgroundAlpha ?: el.backgroundAlpha).coerceIn(0.1f, 1.0f),
+                  backgroundCornerRadiusDp =
+                    (patch.backgroundCornerRadiusDp ?: el.backgroundCornerRadiusDp).coerceIn(0f, 32f),
+                  depthLayer = patch.depthLayer ?: el.depthLayer,
+                )
+              }
+            }
+          val anyBehind = newElements.any { it.depthLayer == DepthLayer.BEHIND_SUBJECT }
+          val nextBgMask =
+            if (patch.depthLayer == DepthLayer.BEHIND_SUBJECT) true
+            else if (patch.depthLayer == DepthLayer.IN_FRONT && !anyBehind && comp.depthLayer != DepthLayer.BEHIND_SUBJECT) {
+              false
+            } else {
+              comp.backgroundMaskEnabled
+            }
+          val nextCompDepth =
+            if (patch.depthLayer == DepthLayer.IN_FRONT && !anyBehind) DepthLayer.IN_FRONT
+            else comp.depthLayer
+
+          if (patch.safeRegion != null) {
+            comp.copy(
+              region = patch.safeRegion,
+              anchorXFraction = patch.safeRegion.defaultAnchorX,
+              anchorYFraction = patch.safeRegion.defaultAnchorY,
+              backgroundMaskEnabled = nextBgMask,
+              depthLayer = nextCompDepth,
+              elements = newElements,
+            )
+          } else {
+            comp.copy(
+              backgroundMaskEnabled = nextBgMask,
+              depthLayer = nextCompDepth,
+              elements = newElements,
+            )
+          }
+        }
+      }
+    commitMutation(project.copy(compositions = updatedComps), recordHistory = recordHistory)
+  }
+
+  fun resetElementStyle(compId: String, elementId: String) {
+    val project = _activeProject.value ?: return
+    val preset = PresetCatalog.findById(project.presetId)
+    val updatedComps =
+      project.compositions.map { comp ->
+        if (comp.id != compId) comp
+        else {
+          comp.copy(
+            elements =
+              comp.elements.map { el ->
+                if (el.id != elementId) el
+                else {
+                  val roleFont =
+                    when (el.role) {
+                      FontRole.HEAVY -> project.fontOverrides.heavyFontId ?: preset.heavyFontId
+                      FontRole.EXPRESSIVE ->
+                        project.fontOverrides.expressiveFontId ?: preset.expressiveFontId
+                      FontRole.SUPPORTING ->
+                        project.fontOverrides.supportingFontId ?: preset.supportingFontId
+                    }
+                  val roleColor =
+                    when (el.hierarchyLevel) {
+                      HierarchyLevel.DOMINANT -> preset.dominantColorHex
+                      HierarchyLevel.EXPRESSIVE -> preset.expressiveColorHex
+                      else -> preset.primaryColorHex
+                    }
+                  val baseSize =
+                    when (el.hierarchyLevel) {
+                      HierarchyLevel.DOMINANT -> 52f * preset.dominantScaleMultiplier
+                      HierarchyLevel.EXPRESSIVE -> 32f * preset.expressiveScaleMultiplier
+                      HierarchyLevel.SUPPORTING -> 20f
+                      HierarchyLevel.SECONDARY -> 16f
+                    }
+                  el.copy(
+                    fontFamilyId = roleFont,
+                    fontWeight = if (el.role == FontRole.HEAVY) 900 else 600,
+                    isItalic = el.role == FontRole.EXPRESSIVE,
+                    isUnderlined = false,
+                    uppercase = el.role == FontRole.HEAVY,
+                    fontSizeSp = baseSize.coerceIn(15f, 68f),
+                    colorHex = roleColor,
+                    alignment = TextAlignment.CENTER,
+                    letterSpacingEm = 0f,
+                    lineHeightMultiplier = 1.05f,
+                    opacity = 1.0f,
+                    rotationDeg = 0f,
+                    offsetXEm = 0f,
+                    offsetYEm = 0f,
+                    strokeWidthFactor = 0f,
+                    strokeColorHex = StudioPalette.SHADOW,
+                    glowColorHex = null,
+                    glowIntensity = 1.0f,
+                    shadowEnabled = true,
+                    shadowIntensity = 1.0f,
+                    shadowColorHex = StudioPalette.SHADOW,
+                    backgroundColorHex = null,
+                    backgroundAlpha = 0.72f,
+                    backgroundCornerRadiusDp = 10f,
+                    depthLayer = DepthLayer.IN_FRONT,
+                  )
+                }
+              }
+          )
+        }
+      }
+    commitMutation(project.copy(compositions = updatedComps))
+    _statusBanner.value = "Reset layer style to preset defaults."
+  }
+
   fun applyElementStyle(
     compId: String,
     elementId: String,
@@ -1091,44 +1279,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     uppercase: Boolean? = null,
     safeRegion: SafeRegion? = null,
   ) {
-    val project = _activeProject.value ?: return
-    val updatedComps =
-      project.compositions.map { comp ->
-        val matchesComp =
-          scope == ApplyScope.ALL_COMPOSITIONS || comp.id == compId
-        if (!matchesComp) {
-          comp
-        } else {
-          val newElements =
-            comp.elements.map { el ->
-              val matchesEl =
-                scope != ApplyScope.SINGLE_ELEMENT || el.id == elementId
-              if (!matchesEl) el
-              else {
-                el.copy(
-                  fontFamilyId = fontFamilyId ?: el.fontFamilyId,
-                  fontWeight = fontWeight ?: el.fontWeight,
-                  isItalic = isItalic ?: el.isItalic,
-                  fontSizeSp = fontSizeSp ?: el.fontSizeSp,
-                  colorHex = colorHex ?: el.colorHex,
-                  alignment = alignment ?: el.alignment,
-                  uppercase = uppercase ?: el.uppercase,
-                )
-              }
-            }
-          if (safeRegion != null) {
-            comp.copy(
-              region = safeRegion,
-              anchorXFraction = safeRegion.defaultAnchorX,
-              anchorYFraction = safeRegion.defaultAnchorY,
-              elements = newElements,
-            )
-          } else {
-            comp.copy(elements = newElements)
-          }
-        }
-      }
-    commitMutation(project.copy(compositions = updatedComps))
+    updateElementStyle(
+      compId = compId,
+      elementId = elementId,
+      scope = scope,
+      patch =
+        ElementStylePatch(
+          fontFamilyId = fontFamilyId,
+          fontWeight = fontWeight,
+          isItalic = isItalic,
+          fontSizeSp = fontSizeSp,
+          colorHex = colorHex,
+          alignment = alignment,
+          uppercase = uppercase,
+          safeRegion = safeRegion,
+        ),
+    )
   }
 
   fun applyAnimationSettings(
@@ -1217,7 +1383,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val result = FontRegistry.downloadAndCacheFont(getApplication(), familyName, role)
         _statusBanner.value =
           result.fold(
-            onSuccess = { "Cached '${it.displayName}' locally for offline use." },
+            onSuccess = {
+              _fontsVersion.value += 1
+              "Cached '${it.displayName}' locally for offline use."
+            },
             onFailure = { it.localizedMessage ?: "Font download failed." },
           )
       } finally {

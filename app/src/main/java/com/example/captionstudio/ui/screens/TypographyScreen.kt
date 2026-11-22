@@ -7,8 +7,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -33,42 +32,49 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionProject
+import com.example.captionstudio.domain.model.CompositionElement
+import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.FontRole
-import com.example.captionstudio.domain.model.SafeRegion
-import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.typography.FontRegistry
+import com.example.captionstudio.ui.components.ActiveLayerSelectorBar
+import com.example.captionstudio.ui.components.HorizontalFontSelectorStrip
 import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.StudioMinimalTopBar
 import com.example.captionstudio.ui.components.StudioSubtlePill
+import com.example.captionstudio.ui.components.TypographyInspectorDeck
+import com.example.captionstudio.ui.components.parseComposeHexColor
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCoral
@@ -76,30 +82,30 @@ import com.example.ui.theme.StudioCoralContainer
 import com.example.ui.theme.StudioCoralLight
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioHairline
-import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TypographyScreen(
   project: CaptionProject?,
   selectedCompositionId: String?,
   selectedElementId: String?,
-  onApplyStyle: (
+  fontsVersion: Int = 0,
+  canUndo: Boolean = false,
+  onUndo: () -> Unit = {},
+  onSelectElement: (String, String) -> Unit = { _, _ -> },
+  onUpdateElementText: (String, String, String) -> Unit = { _, _, _ -> },
+  onDeleteElement: (String, String) -> Unit = { _, _ -> },
+  onPatchStyle: (
     compId: String,
     elementId: String,
     scope: ApplyScope,
-    fontFamilyId: String?,
-    fontWeight: Int?,
-    isItalic: Boolean?,
-    fontSizeSp: Float?,
-    colorHex: String?,
-    alignment: TextAlignment?,
-    uppercase: Boolean?,
-    safeRegion: SafeRegion?,
+    patch: ElementStylePatch,
+    recordHistory: Boolean,
   ) -> Unit,
+  onResetElementStyle: (String, String) -> Unit = { _, _ -> },
+  onToggleDepthMask: (String) -> Unit = {},
   onApplyPairing: (CuratedFontPairing) -> Unit,
   onDownloadFont: (String, FontRole) -> Unit,
   onBack: () -> Unit,
@@ -112,21 +118,12 @@ fun TypographyScreen(
       ?: activeComp?.elements?.firstOrNull()
 
   var scope by remember { mutableStateOf(ApplyScope.SINGLE_ELEMENT) }
-  var selectedFontId by remember(activeEl?.id) { mutableStateOf(activeEl?.fontFamilyId ?: "anton") }
-  var selectedWeight by remember(activeEl?.id) { mutableIntStateOf(activeEl?.fontWeight ?: 700) }
-  var isItalic by remember(activeEl?.id) { mutableStateOf(activeEl?.isItalic ?: false) }
-  var isUppercase by remember(activeEl?.id) { mutableStateOf(activeEl?.uppercase ?: false) }
-  var fontSizeSp by remember(activeEl?.id) { mutableFloatStateOf(activeEl?.fontSizeSp ?: 28f) }
-  var selectedColor by remember(activeEl?.id) { mutableStateOf(activeEl?.colorHex ?: StudioPalette.WHITE) }
-  var selectedAlignment by remember(activeEl?.id) { mutableStateOf(activeEl?.alignment ?: TextAlignment.CENTER) }
-  var selectedRegion by remember(activeComp?.id) { mutableStateOf(activeComp?.region ?: SafeRegion.LOWER_CENTER) }
-
   var searchQuery by remember { mutableStateOf("") }
   var roleFilter by remember { mutableStateOf<FontRole?>(null) }
   var customFontInput by remember { mutableStateOf("") }
 
   val filteredFonts =
-    remember(searchQuery, roleFilter) { FontRegistry.search(searchQuery, roleFilter) }
+    remember(searchQuery, roleFilter, fontsVersion) { FontRegistry.search(searchQuery, roleFilter) }
 
   val chipColors =
     FilterChipDefaults.filterChipColors(
@@ -138,36 +135,32 @@ fun TypographyScreen(
     containerColor = StudioObsidian,
     topBar = {
       StudioMinimalTopBar(
-        title = "Typography",
+        title = "Typography Studio",
         subtitle = activeEl?.let { "Editing \"${it.text}\"" } ?: "Fonts & global pairings",
         onBack = onBack,
         backButtonTag = "typography_back_button",
         trailingContent = {
-          if (activeComp != null && activeEl != null) {
-            Button(
-              onClick = {
-                onApplyStyle(
-                  activeComp.id,
-                  activeEl.id,
-                  scope,
-                  selectedFontId,
-                  selectedWeight,
-                  isItalic,
-                  fontSizeSp,
-                  selectedColor,
-                  selectedAlignment,
-                  isUppercase,
-                  selectedRegion,
-                )
-                onBack()
-              },
-              shape = CircleShape,
-              colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = StudioObsidian),
-              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-              modifier = Modifier.height(38.dp).testTag("apply_typography_button"),
+          if (canUndo) {
+            IconButton(
+              onClick = onUndo,
+              modifier = Modifier.size(40.dp).testTag("typography_undo_button"),
             ) {
-              Text("Apply", fontWeight = FontWeight.SemiBold)
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Undo,
+                contentDescription = "Undo typography change",
+                tint = StudioTextPrimary,
+                modifier = Modifier.size(19.dp),
+              )
             }
+          }
+          Button(
+            onClick = onBack,
+            shape = CircleShape,
+            colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = StudioObsidian),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            modifier = Modifier.height(38.dp).testTag("apply_typography_button"),
+          ) {
+            Text("Done", fontWeight = FontWeight.SemiBold)
           }
         },
       )
@@ -182,169 +175,82 @@ fun TypographyScreen(
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
-        // Scope & Live Sample
-        item {
-          StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-              Text("Apply To", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                ApplyScope.entries.forEach { s ->
-                  FilterChip(
-                    selected = scope == s,
-                    onClick = { scope = s },
-                    shape = CircleShape,
-                    colors = chipColors,
-                    label = { Text(s.label) },
-                  )
-                }
-              }
+        // 1. Live Rendered Typography Preview + Layer Selector + Horizontal Font Selector
+        if (activeComp != null && activeEl != null) {
+          item {
+            StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
+              Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                ActiveLayerSelectorBar(
+                  activeComp = activeComp,
+                  activeEl = activeEl,
+                  applyScope = scope,
+                  onSelectElement = { elId -> onSelectElement(activeComp.id, elId) },
+                  onScopeChange = { scope = it },
+                  onResetStyle = { onResetElementStyle(activeComp.id, activeEl.id) },
+                )
 
-              val previewFont = FontRegistry.findById(selectedFontId)
-              Box(
-                modifier =
-                  Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(StudioObsidian)
-                    .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
-                    .padding(vertical = 26.dp, horizontal = 14.dp),
-                contentAlignment = Alignment.Center,
-              ) {
-                val sample = activeEl?.text ?: "Creators Craft Text"
+                LiveElementPreviewBanner(
+                  element = activeEl,
+                  fontsVersion = fontsVersion,
+                )
+
                 Text(
-                  text = if (isUppercase) sample.uppercase() else sample,
-                  fontFamily = previewFont.composeFontFamily,
-                  fontSize = fontSizeSp.coerceIn(16f, 44f).sp,
-                  fontWeight = if (selectedWeight >= 700) FontWeight.Bold else FontWeight.Normal,
-                  fontStyle = if (isItalic) FontStyle.Italic else FontStyle.Normal,
-                  color = Color(android.graphics.Color.parseColor(selectedColor)),
+                  text = "Typeface",
+                  style = MaterialTheme.typography.titleSmall,
+                  color = StudioTextPrimary,
                 )
-              }
-            }
-          }
-        }
 
-        // Color, Size, Weight & Placement
-        item {
-          StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-              Text("Color Palette", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                listOf(
-                  StudioPalette.WHITE to "White",
-                  StudioPalette.YELLOW to "Yellow",
-                  StudioPalette.ORANGE to "Amber",
-                  StudioPalette.RED to "Red",
-                  StudioPalette.CYAN to "Cyan",
-                ).forEach { (hex, label) ->
-                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                      modifier =
-                        Modifier.size(40.dp)
-                          .clip(CircleShape)
-                          .background(Color(android.graphics.Color.parseColor(hex)))
-                          .border(
-                            width = if (selectedColor.equals(hex, true)) 3.dp else 1.dp,
-                            color = if (selectedColor.equals(hex, true)) StudioCoral else StudioHairlineStrong,
-                            shape = CircleShape,
-                          )
-                          .clickable { selectedColor = hex }
+                HorizontalFontSelectorStrip(
+                  selectedFontId = activeEl.fontFamilyId,
+                  onSelectFont = { fontId ->
+                    onPatchStyle(
+                      activeComp.id,
+                      activeEl.id,
+                      scope,
+                      ElementStylePatch(fontFamilyId = fontId),
+                      true,
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
-                  }
-                }
-              }
-
-              Column {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                  Text("Size", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-                  Text("${fontSizeSp.toInt()} sp", style = MaterialTheme.typography.labelMedium, color = StudioCoralLight)
-                }
-                Slider(
-                  value = fontSizeSp,
-                  onValueChange = { fontSizeSp = it },
-                  valueRange = 14f..64f,
-                  colors =
-                    SliderDefaults.colors(
-                      thumbColor = Color.White,
-                      activeTrackColor = StudioCoral,
-                      inactiveTrackColor = StudioElevated,
-                    ),
+                  },
+                  fontsVersion = fontsVersion,
+                  showRoleFilters = true,
+                  compact = false,
+                  previewItalic = activeEl.isItalic,
+                  previewUppercase = activeEl.uppercase,
                 )
               }
+            }
+          }
 
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Text("Italic Style", color = StudioTextPrimary)
-                Switch(
-                  checked = isItalic,
-                  onCheckedChange = { isItalic = it },
-                  colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = StudioCoral),
+          // 2. Full Organized Typography Inspector (`Text | Color | Effects | Layout`)
+          item {
+            StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
+              Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                  text = "Customize Typography",
+                  style = MaterialTheme.typography.titleSmall,
+                  color = StudioTextPrimary,
                 )
-              }
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Text("Uppercase", color = StudioTextPrimary)
-                Switch(
-                  checked = isUppercase,
-                  onCheckedChange = { isUppercase = it },
-                  colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = StudioCoral),
+                TypographyInspectorDeck(
+                  activeComp = activeComp,
+                  activeEl = activeEl,
+                  onPatchStyle = { patch, record ->
+                    onPatchStyle(activeComp.id, activeEl.id, scope, patch, record)
+                  },
+                  onUpdateText = { newText ->
+                    onUpdateElementText(activeComp.id, activeEl.id, newText)
+                  },
+                  onDeleteElement =
+                    if (activeComp.elements.size > 1) {
+                      { onDeleteElement(activeComp.id, activeEl.id) }
+                    } else null,
+                  onToggleCaptionDepthMask = { onToggleDepthMask(activeComp.id) },
                 )
-              }
-
-              Text("Weight & Alignment", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(400 to "Regular", 600 to "SemiBold", 900 to "Black").forEach { (w, lbl) ->
-                  FilterChip(
-                    selected = selectedWeight == w,
-                    onClick = { selectedWeight = w },
-                    shape = CircleShape,
-                    colors = chipColors,
-                    label = { Text(lbl) },
-                  )
-                }
-              }
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextAlignment.entries.forEach { align ->
-                  FilterChip(
-                    selected = selectedAlignment == align,
-                    onClick = { selectedAlignment = align },
-                    shape = CircleShape,
-                    colors = chipColors,
-                    label = { Text(align.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                  )
-                }
-              }
-
-              Text("Placement Region", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SafeRegion.entries.filter { it != SafeRegion.CUSTOM }.forEach { reg ->
-                  FilterChip(
-                    selected = selectedRegion == reg,
-                    onClick = { selectedRegion = reg },
-                    shape = CircleShape,
-                    colors = chipColors,
-                    label = { Text(reg.label) },
-                  )
-                }
               }
             }
           }
         }
 
-        // Curated Pairings
+        // 3. Curated Pairings
         item {
           Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Curated Pairings", style = MaterialTheme.typography.titleMedium, color = StudioTextPrimary)
@@ -354,8 +260,7 @@ fun TypographyScreen(
             ) {
               FontRegistry.curatedPairings.forEach { pairing ->
                 StudioGlassCard(
-                  modifier =
-                    Modifier.width(210.dp).clickable { onApplyPairing(pairing) },
+                  modifier = Modifier.width(210.dp).clickable { onApplyPairing(pairing) },
                   cornerRadius = 18.dp,
                   containerColor = StudioElevated,
                 ) {
@@ -369,14 +274,14 @@ fun TypographyScreen(
           }
         }
 
-        // Font Browser & Downloader
+        // 4. Searchable Full Font Library & Custom Google Font Downloader
         item {
           Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Font Library", style = MaterialTheme.typography.titleMedium, color = StudioTextPrimary)
+            Text("Font Library & Downloads", style = MaterialTheme.typography.titleMedium, color = StudioTextPrimary)
             OutlinedTextField(
               value = searchQuery,
               onValueChange = { searchQuery = it },
-              placeholder = { Text("Search Anton, Inter, Playfair...") },
+              placeholder = { Text("Search Anton, Syne, Montserrat, Playfair...") },
               leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
               singleLine = true,
               shape = RoundedCornerShape(16.dp),
@@ -417,7 +322,7 @@ fun TypographyScreen(
               OutlinedTextField(
                 value = customFontInput,
                 onValueChange = { customFontInput = it },
-                placeholder = { Text("Download Google Font (e.g. Syne)") },
+                placeholder = { Text("Download Google Font (e.g. Poppins)") },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
                 colors =
@@ -446,10 +351,20 @@ fun TypographyScreen(
         }
 
         items(filteredFonts, key = { it.id }) { font ->
-          val isChosen = font.id == selectedFontId
+          val isChosen = font.id == activeEl?.fontFamilyId
           StudioGlassCard(
             modifier =
-              Modifier.fillMaxWidth().clickable { selectedFontId = font.id },
+              Modifier.fillMaxWidth().clickable {
+                if (activeComp != null && activeEl != null) {
+                  onPatchStyle(
+                    activeComp.id,
+                    activeEl.id,
+                    scope,
+                    ElementStylePatch(fontFamilyId = font.id),
+                    true,
+                  )
+                }
+              },
             cornerRadius = 18.dp,
             containerColor = if (isChosen) StudioElevated else StudioCard,
             borderColor = if (isChosen) StudioCoral else StudioHairline,
@@ -480,6 +395,107 @@ fun TypographyScreen(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun LiveElementPreviewBanner(
+  element: CompositionElement,
+  fontsVersion: Int,
+) {
+  val previewFont = remember(element.fontFamilyId, fontsVersion) { FontRegistry.findById(element.fontFamilyId) }
+  val fillColor = remember(element.colorHex) { parseComposeHexColor(element.colorHex) }
+  val bgColor = remember(element.backgroundColorHex) { element.backgroundColorHex?.let { parseComposeHexColor(it) } }
+  val strokeColor = remember(element.strokeColorHex) { parseComposeHexColor(element.strokeColorHex) }
+  val shadowColor =
+    remember(element.shadowColorHex, element.glowColorHex, element.shadowEnabled) {
+      val hex = element.glowColorHex ?: if (element.shadowEnabled) element.shadowColorHex else null
+      hex?.let { parseComposeHexColor(it) }
+    }
+
+  val displayText = if (element.uppercase) element.text.uppercase() else element.text
+  val mappedWeight = FontWeight(element.fontWeight.coerceIn(100, 900))
+  val mappedAlign =
+    when (element.alignment) {
+      TextAlignment.LEFT -> TextAlign.Start
+      TextAlignment.RIGHT -> TextAlign.End
+      TextAlignment.CENTER -> TextAlign.Center
+    }
+  val previewSp = element.fontSizeSp.coerceIn(16f, 44f).sp
+  val decoration = if (element.isUnderlined) TextDecoration.Underline else TextDecoration.None
+  val composeShadow =
+    when {
+      !element.glowColorHex.isNullOrBlank() && shadowColor != null ->
+        Shadow(
+          color = shadowColor.copy(alpha = 0.85f),
+          offset = Offset.Zero,
+          blurRadius = (18f * element.glowIntensity).coerceIn(4f, 36f),
+        )
+      element.shadowEnabled && shadowColor != null ->
+        Shadow(
+          color = shadowColor.copy(alpha = 0.72f),
+          offset = Offset(0f, 4f),
+          blurRadius = (12f * element.shadowIntensity).coerceIn(2f, 28f),
+        )
+      else -> null
+    }
+
+  Box(
+    modifier =
+      Modifier.fillMaxWidth()
+        .clip(RoundedCornerShape(16.dp))
+        .background(StudioObsidian)
+        .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
+        .padding(vertical = 26.dp, horizontal = 16.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Box(
+      modifier =
+        Modifier.rotate(element.rotationDeg)
+          .alpha(element.opacity.coerceIn(0.15f, 1f))
+          .let { base ->
+            if (bgColor != null) {
+              base
+                .clip(RoundedCornerShape(element.backgroundCornerRadiusDp.dp))
+                .background(bgColor.copy(alpha = element.backgroundAlpha.coerceIn(0.15f, 1f)))
+                .padding(horizontal = 14.dp, vertical = 7.dp)
+            } else base
+          },
+      contentAlignment = Alignment.Center,
+    ) {
+      if (element.strokeWidthFactor > 0.05f) {
+        Text(
+          text = displayText,
+          textAlign = mappedAlign,
+          style =
+            TextStyle(
+              fontFamily = previewFont.composeFontFamily,
+              fontSize = previewSp,
+              fontWeight = mappedWeight,
+              fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
+              letterSpacing = (element.letterSpacingEm * 16f).sp,
+              textDecoration = decoration,
+              color = strokeColor,
+              drawStyle = Stroke(width = (element.strokeWidthFactor * 2.2f).coerceIn(1f, 16f)),
+            ),
+        )
+      }
+      Text(
+        text = displayText,
+        textAlign = mappedAlign,
+        style =
+          TextStyle(
+            fontFamily = previewFont.composeFontFamily,
+            fontSize = previewSp,
+            fontWeight = mappedWeight,
+            fontStyle = if (element.isItalic) FontStyle.Italic else FontStyle.Normal,
+            letterSpacing = (element.letterSpacingEm * 16f).sp,
+            textDecoration = decoration,
+            color = fillColor,
+            shadow = composeShadow,
+          ),
+      )
     }
   }
 }

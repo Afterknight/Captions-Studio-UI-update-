@@ -84,6 +84,26 @@ object FontRegistry {
         styleNote = "Crisp condensed gothic display",
       ),
       StudioFontDescriptor(
+        id = "syne",
+        displayName = "Syne",
+        role = FontRole.HEAVY,
+        resId = R.font.syne,
+        composeFontFamily = FontFamily(Font(R.font.syne, FontWeight.Normal)),
+        availableWeights = listOf(400, 700, 800),
+        supportsItalic = false,
+        styleNote = "Avant-garde extended art-direction display",
+      ),
+      StudioFontDescriptor(
+        id = "montserrat",
+        displayName = "Montserrat",
+        role = FontRole.HEAVY,
+        resId = R.font.montserrat,
+        composeFontFamily = FontFamily(Font(R.font.montserrat, FontWeight.Normal)),
+        availableWeights = listOf(400, 600, 700, 900),
+        supportsItalic = true,
+        styleNote = "Bold urban geometric headline sans",
+      ),
+      StudioFontDescriptor(
         id = "inter",
         displayName = "Inter",
         role = FontRole.SUPPORTING,
@@ -102,6 +122,26 @@ object FontRegistry {
         availableWeights = listOf(400, 500, 600, 700),
         supportsItalic = true,
         styleNote = "Crisp modern creator sans for lead-ins & whispers",
+      ),
+      StudioFontDescriptor(
+        id = "space_grotesk",
+        displayName = "Space Grotesk",
+        role = FontRole.SUPPORTING,
+        resId = R.font.space_grotesk,
+        composeFontFamily = FontFamily(Font(R.font.space_grotesk, FontWeight.Normal)),
+        availableWeights = listOf(400, 500, 700),
+        supportsItalic = false,
+        styleNote = "Tech-forward proportional grotesque sans",
+      ),
+      StudioFontDescriptor(
+        id = "jetbrains_mono",
+        displayName = "JetBrains Mono",
+        role = FontRole.SUPPORTING,
+        resId = R.font.jetbrains_mono,
+        composeFontFamily = FontFamily(Font(R.font.jetbrains_mono, FontWeight.Normal)),
+        availableWeights = listOf(400, 600, 700),
+        supportsItalic = true,
+        styleNote = "Crisp editorial monospace for subtitles & data",
       ),
       StudioFontDescriptor(
         id = "dm_sans",
@@ -329,13 +369,15 @@ object FontRegistry {
           id.split("_").joinToString(" ") { part ->
             part.replaceFirstChar { it.uppercaseChar() }
           }
+        val composeFamily =
+          runCatching { FontFamily(Typeface.createFromFile(file)) }.getOrDefault(FontFamily.SansSerif)
         downloadedFonts[id] =
           StudioFontDescriptor(
             id = id,
             displayName = pretty,
             role = FontRole.SUPPORTING,
             resId = R.font.inter,
-            composeFontFamily = FontFamily.SansSerif,
+            composeFontFamily = composeFamily,
             availableWeights = listOf(400, 700),
             supportsItalic = true,
             styleNote = "Cached local font file",
@@ -383,13 +425,15 @@ object FontRegistry {
             }
           target.writeBytes(fontBytes)
         }
+        val composeFamily =
+          runCatching { FontFamily(Typeface.createFromFile(target)) }.getOrDefault(FontFamily.SansSerif)
         val descriptor =
           StudioFontDescriptor(
             id = sanitized,
             displayName = familyName.trim(),
             role = role,
             resId = R.font.inter,
-            composeFontFamily = FontFamily.SansSerif,
+            composeFontFamily = composeFamily,
             availableWeights = listOf(400, 700),
             supportsItalic = true,
             styleNote = "Downloaded & cached locally",

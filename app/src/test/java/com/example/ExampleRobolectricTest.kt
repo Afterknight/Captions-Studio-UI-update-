@@ -25,13 +25,63 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `all 15 bundled offline google fonts load cleanly`() {
+  fun `all 19 bundled offline google fonts load cleanly`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
-    assertEquals(15, FontRegistry.bundledFonts.size)
+    assertEquals(19, FontRegistry.bundledFonts.size)
     FontRegistry.bundledFonts.forEach { font ->
       val tf = FontRegistry.getTypeface(context, font.id, 700, font.supportsItalic)
       assertNotNull("Typeface failed for ${font.id}", tf)
     }
+  }
+
+  @Test
+  fun `renderer draws customized typography with outline, pill background, glow, shadow, and underline`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val renderer = KineticCompositionRenderer(context)
+    val customComp =
+      com.example.captionstudio.domain.model.CaptionComposition(
+        id = "custom_typo_1",
+        startMs = 0L,
+        endMs = 2500L,
+        originalText = "Kinetic Style",
+        elements =
+          listOf(
+            com.example.captionstudio.domain.model.CompositionElement(
+              id = "el_custom",
+              text = "Kinetic Style",
+              role = com.example.captionstudio.domain.model.FontRole.HEAVY,
+              hierarchyLevel = com.example.captionstudio.domain.model.HierarchyLevel.DOMINANT,
+              fontFamilyId = "syne",
+              fontWeight = 800,
+              isItalic = true,
+              isUnderlined = true,
+              uppercase = true,
+              fontSizeSp = 38f,
+              colorHex = com.example.captionstudio.domain.model.StudioPalette.CORAL,
+              letterSpacingEm = 0.08f,
+              lineHeightMultiplier = 1.25f,
+              opacity = 0.92f,
+              rotationDeg = -6f,
+              strokeWidthFactor = 3.0f,
+              strokeColorHex = com.example.captionstudio.domain.model.StudioPalette.WHITE,
+              glowColorHex = com.example.captionstudio.domain.model.StudioPalette.YELLOW,
+              glowIntensity = 1.4f,
+              shadowEnabled = true,
+              shadowIntensity = 1.2f,
+              shadowColorHex = com.example.captionstudio.domain.model.StudioPalette.SHADOW,
+              backgroundColorHex = com.example.captionstudio.domain.model.StudioPalette.CHARCOAL,
+              backgroundAlpha = 0.80f,
+              backgroundCornerRadiusDp = 14f,
+            )
+          ),
+      )
+    val validated = CompositionValidator.validateAndRepair(context, listOf(customComp))
+    assertEquals("syne", validated.first().elements.first().fontFamilyId)
+    assertEquals(com.example.captionstudio.domain.model.StudioPalette.CHARCOAL, validated.first().elements.first().backgroundColorHex)
+    val bmp = android.graphics.Bitmap.createBitmap(540, 960, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    renderer.drawAtTime(canvas, 540, 960, validated, 450L)
+    bmp.recycle()
   }
 
   @Test

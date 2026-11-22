@@ -60,12 +60,14 @@ class KineticCompositionRenderer(private val context: Context) {
     val element: CompositionElement,
     val paint: TextPaint,
     val glowPaint: TextPaint?,
-    val shadowPaint: TextPaint?,
+    val strokePaint: TextPaint?,
+    val backgroundPaint: Paint?,
     val lines: List<MeasuredLine>,
     val blockWidthPx: Float,
     val blockHeightPx: Float,
     val centerOffsetXFromAnchorPx: Float,
     val topYOffsetPx: Float,
+    val lineSpacingFactor: Float,
   )
 
   private data class CachedLayout(
@@ -324,7 +326,8 @@ class KineticCompositionRenderer(private val context: Context) {
     }
 
     if (alpha <= 0.01f) return
-    val baseAlphaByte = (alpha.coerceIn(0f, 1f) * 255).toInt()
+    val effectiveOpacity = el.opacity.coerceIn(0.05f, 1f)
+    val baseAlphaByte = (alpha.coerceIn(0f, 1f) * effectiveOpacity * 255f).toInt().coerceIn(0, 255)
 
     val elementCenterY = boxTop + measured.topYOffsetPx + measured.blockHeightPx / 2f
     val elementCenterX =
@@ -339,6 +342,23 @@ class KineticCompositionRenderer(private val context: Context) {
       canvas.rotate(el.rotationDeg)
     }
     canvas.scale(scale, scale)
+
+    // Optional Highlight Pill / Background Box behind text block
+    val bgPaint = measured.backgroundPaint
+    if (bgPaint != null) {
+      val padX = 11f * baseScale
+      val padY = 6f * baseScale
+      val cornerR = el.backgroundCornerRadiusDp.coerceIn(0f, 32f) * baseScale
+      bgPaint.alpha = (baseAlphaByte * el.backgroundAlpha.coerceIn(0.1f, 1f)).toInt().coerceIn(0, 255)
+      val bgRect =
+        RectF(
+          -measured.blockWidthPx / 2f - padX,
+          -measured.blockHeightPx / 2f - padY,
+          measured.blockWidthPx / 2f + padX,
+          measured.blockHeightPx / 2f + padY,
+        )
+      canvas.drawRoundRect(bgRect, cornerR, cornerR, bgPaint)
+    }
 
     val canDoWordReveal =
       el.hierarchyLevel != HierarchyLevel.DOMINANT &&
@@ -374,7 +394,8 @@ class KineticCompositionRenderer(private val context: Context) {
             y = baselineY + wordRise,
             paint = measured.paint,
             glowPaint = measured.glowPaint,
-            shadowPaint = measured.shadowPaint,
+            strokePaint = measured.strokePaint,
+            glowIntensity = el.glowIntensity,
             alphaByte = wordAlpha,
           )
         }
@@ -386,11 +407,12 @@ class KineticCompositionRenderer(private val context: Context) {
           y = baselineY,
           paint = measured.paint,
           glowPaint = measured.glowPaint,
-          shadowPaint = measured.shadowPaint,
+          strokePaint = measured.strokePaint,
+          glowIntensity = el.glowIntensity,
           alphaByte = baseAlphaByte,
         )
       }
-      localY += line.heightPx * 1.05f
+      localY += line.heightPx * measured.lineSpacingFactor
     }
     canvas.restore()
   }
@@ -402,16 +424,18 @@ class KineticCompositionRenderer(private val context: Context) {
     y: Float,
     paint: TextPaint,
     glowPaint: TextPaint?,
-    shadowPaint: TextPaint?,
+    strokePaint: TextPaint?,
+    glowIntensity: Float,
     alphaByte: Int,
   ) {
     if (glowPaint != null) {
-      glowPaint.alpha = (alphaByte * 0.55f).toInt()
+      val glowAlphaFactor = (0.55f * glowIntensity.coerceIn(0.25f, 1.8f)).coerceIn(0.15f, 0.95f)
+      glowPaint.alpha = (alphaByte * glowAlphaFactor).toInt().coerceIn(0, 255)
       canvas.drawText(text, x, y, glowPaint)
     }
-    if (shadowPaint != null) {
-      shadowPaint.alpha = (alphaByte * 0.50f).toInt()
-      canvas.drawText(text, x, y, shadowPaint)
+    if (strokePaint != null) {
+      strokePaint.alpha = alphaByte
+      canvas.drawText(text, x, y, strokePaint)
     }
     paint.alpha = alphaByte
     canvas.drawText(text, x, y, paint)
@@ -431,11 +455,17 @@ class KineticCompositionRenderer(private val context: Context) {
         append(shadowMultiplier).append('|')
         comp.elements.forEach { el ->
           append(el.text).append(':').append(el.fontFamilyId).append(':').append(el.fontWeight)
-          append(':').append(el.isItalic).append(':').append(el.fontSizeSp)
+          append(':').append(el.isItalic).append(':').append(el.isUnderlined).append(':').append(el.fontSizeSp)
           append(':').append(el.colorHex).append(':').append(el.alignment)
-          append(':').append(el.uppercase).append(':').append(el.inlineRowGroup)
-          append(':').append(el.rotationDeg).append(':').append(el.offsetYEm)
-          append(':').append(el.glowColorHex).append(';')
+          append(':').append(el.uppercase).append(':').append(el.letterSpacingEm)
+          append(':').append(el.lineHeightMultiplier).append(':').append(el.opacity)
+          append(':').append(el.inlineRowGroup).append(':').append(el.rotationDeg)
+          append(':').append(el.offsetXEm).append(':').append(el.offsetYEm)
+          append(':').append(el.glowColorHex).append(':').append(el.glowIntensity)
+          append(':').append(el.strokeWidthFactor).append(':').append(el.strokeColorHex)
+          append(':').append(el.shadowEnabled).append(':').append(el.shadowIntensity).append(':').append(el.shadowColorHex)
+          append(':').append(el.backgroundColorHex).append(':').append(el.backgroundAlpha).append(':').append(el.backgroundCornerRadiusDp)
+          append(':').append(el.depthLayer).append(';')
         }
       }
     layoutCache[sig]?.let { return it }
@@ -448,18 +478,28 @@ class KineticCompositionRenderer(private val context: Context) {
     val maxLineWidthPx = canvasWidth * 0.86f
     val measuredRaw = mutableListOf<MeasuredElement>()
 
+    data class PaintBundle(
+      val fill: TextPaint,
+      val glow: TextPaint?,
+      val stroke: TextPaint?,
+      val background: Paint?,
+      val lineSpacingFactor: Float,
+    )
+
     // Measure individual elements first
     val elementSizes =
       comp.elements.map { el ->
         val textStr = if (el.uppercase) el.text.uppercase() else el.text
         val typeface = FontRegistry.getTypeface(context, el.fontFamilyId, el.fontWeight, el.isItalic)
         var textSizePx = el.fontSizeSp * baseScale
+        val lineSpacingFactor = el.lineHeightMultiplier.coerceIn(0.8f, 1.8f)
 
         val paint =
           TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             this.typeface = typeface
             this.textSize = textSizePx
             this.color = parseSafeColor(el.colorHex)
+            this.isUnderlineText = el.isUnderlined
             if (el.isItalic && el.fontFamilyId !in setOf("caveat", "pacifico")) {
               textSkewX = -0.18f
             }
@@ -472,32 +512,56 @@ class KineticCompositionRenderer(private val context: Context) {
           paint.textSize = textSizePx
         }
 
-        val shadowRadius =
-          (if (el.hierarchyLevel == HierarchyLevel.DOMINANT) 10f else 5.5f) *
-            baseScale *
-            shadowMultiplier
-        paint.setShadowLayer(shadowRadius, 0f, 1.8f * baseScale, Color.argb(185, 0, 0, 0))
+        if (el.shadowEnabled && el.shadowIntensity > 0.02f) {
+          val shadowRadius =
+            (if (el.hierarchyLevel == HierarchyLevel.DOMINANT) 10f else 5.5f) *
+              baseScale *
+              shadowMultiplier *
+              el.shadowIntensity.coerceIn(0.1f, 2.2f)
+          val rawShadowColor = parseSafeColor(el.shadowColorHex)
+          val shadowAlpha = (185f * el.shadowIntensity.coerceIn(0.1f, 1.35f)).toInt().coerceIn(24, 240)
+          val resolvedShadowColor =
+            Color.argb(
+              shadowAlpha,
+              Color.red(rawShadowColor),
+              Color.green(rawShadowColor),
+              Color.blue(rawShadowColor),
+            )
+          paint.setShadowLayer(shadowRadius, 0f, 1.8f * baseScale, resolvedShadowColor)
+        } else {
+          paint.clearShadowLayer()
+        }
 
         val glowPaint =
-          el.glowColorHex?.let { glowHex ->
+          el.glowColorHex?.takeIf { it.isNotBlank() }?.let { glowHex ->
             TextPaint(paint).apply {
               color = parseSafeColor(glowHex)
               clearShadowLayer()
-              maskFilter = BlurMaskFilter((10f * baseScale).coerceAtLeast(1f), BlurMaskFilter.Blur.OUTER)
+              val blurRadius = (10f * baseScale * el.glowIntensity.coerceIn(0.3f, 2.2f)).coerceAtLeast(1f)
+              maskFilter = BlurMaskFilter(blurRadius, BlurMaskFilter.Blur.OUTER)
             }
           }
 
-        val shadowPaint =
-          if (el.strokeWidthFactor > 0f) {
+        val strokePaint =
+          if (el.strokeWidthFactor > 0.05f) {
             TextPaint(paint).apply {
-              color = Color.argb(170, 0, 0, 0)
+              color = parseSafeColor(el.strokeColorHex)
               style = Paint.Style.STROKE
-              strokeWidth = el.strokeWidthFactor * baseScale
+              strokeWidth = el.strokeWidthFactor * 2f * baseScale
               strokeJoin = Paint.Join.ROUND
+              strokeCap = Paint.Cap.ROUND
               clearShadowLayer()
             }
           } else {
             null
+          }
+
+        val bgPaint =
+          el.backgroundColorHex?.takeIf { it.isNotBlank() }?.let { bgHex ->
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+              style = Paint.Style.FILL
+              color = parseSafeColor(bgHex)
+            }
           }
 
         val wrappedLines = wrapLines(textStr, paint, maxLineWidthPx)
@@ -525,8 +589,12 @@ class KineticCompositionRenderer(private val context: Context) {
           }
         val blockW = measuredLines.maxOfOrNull { it.widthPx } ?: 0f
         val blockH =
-          measuredLines.sumOf { (it.heightPx * 1.05f).toDouble() }.toFloat().coerceAtLeast(1f)
-        Triple(el, Triple(paint, glowPaint, shadowPaint), Triple(measuredLines, blockW, blockH))
+          measuredLines.sumOf { (it.heightPx * lineSpacingFactor).toDouble() }.toFloat().coerceAtLeast(1f)
+        Triple(
+          el,
+          PaintBundle(paint, glowPaint, strokePaint, bgPaint, lineSpacingFactor),
+          Triple(measuredLines, blockW, blockH),
+        )
       }
 
     // Group elements by inlineRowGroup so inline tokens ("and" + "keeps", "click" + "Dynamic Captions")
@@ -548,15 +616,14 @@ class KineticCompositionRenderer(private val context: Context) {
 
       var rowXCursor = -rowTotalWidth / 2f
       rowItems.forEach { (el, paints, metrics) ->
-        val (paint, glowPaint, shadowPaint) = paints
         val (lines, blockW, blockH) = metrics
         val baselineAlignedY =
-          yCursor + (rowHeight - blockH) * 0.72f + (el.offsetYEm * paint.textSize)
+          yCursor + (rowHeight - blockH) * 0.72f + (el.offsetYEm * paints.fill.textSize)
         val centerOffsetX =
           if (rowItems.size > 1) {
             val itemCenterX = rowXCursor + blockW / 2f
             rowXCursor += blockW + inlineGapPx
-            itemCenterX + (el.offsetXEm * paint.textSize)
+            itemCenterX + (el.offsetXEm * paints.fill.textSize)
           } else {
             val alignOffset =
               when (el.alignment) {
@@ -564,20 +631,22 @@ class KineticCompositionRenderer(private val context: Context) {
                 TextAlignment.RIGHT -> (maxLineWidthPx * 0.25f) - blockW / 2f
                 TextAlignment.CENTER -> 0f
               }
-            alignOffset + (el.offsetXEm * paint.textSize)
+            alignOffset + (el.offsetXEm * paints.fill.textSize)
           }
 
         measuredRaw.add(
           MeasuredElement(
             element = el,
-            paint = paint,
-            glowPaint = glowPaint,
-            shadowPaint = shadowPaint,
+            paint = paints.fill,
+            glowPaint = paints.glow,
+            strokePaint = paints.stroke,
+            backgroundPaint = paints.background,
             lines = lines,
             blockWidthPx = blockW,
             blockHeightPx = blockH,
             centerOffsetXFromAnchorPx = centerOffsetX,
             topYOffsetPx = max(0f, baselineAlignedY),
+            lineSpacingFactor = paints.lineSpacingFactor,
           )
         )
       }

@@ -38,4 +38,19 @@
     <string name="gallery_dialog_delete_title">Delete Project?</string>
     <string name="gallery_dialog_delete_message">Remove \"%1$s\" and its captions? Your original video in Gallery will not be affected.</string>
     <string name="editor_loading_workspace">Opening studio…</string>
+    <string name="typo_select_layer">Kinetic Layer</string>
+    <string name="typo_font_selector_title">Typeface</string>
+    <string name="typo_scope_layer">This Layer</string>
+    <string name="typo_scope_caption">This Caption</string>
+    <string name="typo_scope_all">All Captions</string>
+    <string name="typo_reset_layer_cd">Reset layer style to preset defaults</string>
+    <string name="typo_delete_layer_cd">Remove selected text layer</string>
+    <string name="typo_add_layer">Add</string>
+    <string name="typo_custom_color_cd">Open custom color picker</string>
+    <string name="typo_decrease_cd">Decrease %1$s</string>
+    <string name="typo_increase_cd">Increase %1$s</string>
+    <string name="typo_tab_text">Text</string>
+    <string name="typo_tab_color">Color</string>
+    <string name="typo_tab_effects">Effects</string>
+    <string name="typo_tab_layout">Layout</string>
 </resources>

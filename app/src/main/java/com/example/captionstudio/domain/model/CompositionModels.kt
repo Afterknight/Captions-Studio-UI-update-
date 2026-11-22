@@ -2,15 +2,57 @@ package com.example.captionstudio.domain.model
 
 import kotlinx.serialization.Serializable
 
+data class ColorSwatchOption(
+  val hex: String,
+  val label: String,
+)
+
 object StudioPalette {
   const val WHITE = "#FFFFFF"
   const val OFF_WHITE = "#F5F7FA"
+  const val CREAM = "#FFF3D6"
   const val YELLOW = "#FFB81C"
   const val GOLD_AMBER = "#FFB81C"
   const val ORANGE = "#FFAD28"
+  const val CORAL = "#EE7E70"
   const val RED = "#FF2E2E"
-  const val SHADOW = "#000000"
+  const val PINK = "#FF5CA8"
+  const val VIOLET = "#A87BFF"
   const val CYAN = "#4CC9F0"
+  const val MINT = "#3AE8B0"
+  const val CHARCOAL = "#1A1A20"
+  const val SHADOW = "#000000"
+
+  val textSwatches: List<ColorSwatchOption> =
+    listOf(
+      ColorSwatchOption(WHITE, "White"),
+      ColorSwatchOption(CREAM, "Warm Cream"),
+      ColorSwatchOption(YELLOW, "Yellow"),
+      ColorSwatchOption(ORANGE, "Amber"),
+      ColorSwatchOption(CORAL, "Coral"),
+      ColorSwatchOption(RED, "Crimson Red"),
+      ColorSwatchOption(PINK, "Neon Pink"),
+      ColorSwatchOption(VIOLET, "Violet"),
+      ColorSwatchOption(CYAN, "Sky Cyan"),
+      ColorSwatchOption(MINT, "Mint Green"),
+      ColorSwatchOption(CHARCOAL, "Charcoal"),
+      ColorSwatchOption(SHADOW, "Pure Black"),
+    )
+
+  val effectSwatches: List<ColorSwatchOption> =
+    listOf(
+      ColorSwatchOption(SHADOW, "Black"),
+      ColorSwatchOption(CHARCOAL, "Obsidian"),
+      ColorSwatchOption(WHITE, "White"),
+      ColorSwatchOption(YELLOW, "Yellow"),
+      ColorSwatchOption(ORANGE, "Amber"),
+      ColorSwatchOption(CORAL, "Coral"),
+      ColorSwatchOption(RED, "Red"),
+      ColorSwatchOption(PINK, "Pink"),
+      ColorSwatchOption(VIOLET, "Violet"),
+      ColorSwatchOption(CYAN, "Cyan"),
+      ColorSwatchOption(MINT, "Mint"),
+    )
 }
 
 @Serializable
@@ -158,6 +200,52 @@ data class CompositionElement(
   val glowColorHex: String? = null,
   val strokeWidthFactor: Float = 0.0f,
   val depthLayer: DepthLayer = DepthLayer.IN_FRONT,
+  val strokeColorHex: String = StudioPalette.SHADOW,
+  val backgroundColorHex: String? = null,
+  val backgroundAlpha: Float = 0.72f,
+  val backgroundCornerRadiusDp: Float = 10f,
+  val shadowEnabled: Boolean = true,
+  val shadowIntensity: Float = 1.0f,
+  val shadowColorHex: String = StudioPalette.SHADOW,
+  val opacity: Float = 1.0f,
+  val lineHeightMultiplier: Float = 1.05f,
+  val isUnderlined: Boolean = false,
+  val glowIntensity: Float = 1.0f,
+)
+
+/**
+ * Surgical patch model for updating any combination of kinetic typography layer attributes
+ * cleanly without long parameter lists.
+ */
+data class ElementStylePatch(
+  val fontFamilyId: String? = null,
+  val fontWeight: Int? = null,
+  val isItalic: Boolean? = null,
+  val isUnderlined: Boolean? = null,
+  val uppercase: Boolean? = null,
+  val fontSizeSp: Float? = null,
+  val colorHex: String? = null,
+  val alignment: TextAlignment? = null,
+  val letterSpacingEm: Float? = null,
+  val lineHeightMultiplier: Float? = null,
+  val opacity: Float? = null,
+  val rotationDeg: Float? = null,
+  val offsetXEm: Float? = null,
+  val offsetYEm: Float? = null,
+  val strokeWidthFactor: Float? = null,
+  val strokeColorHex: String? = null,
+  val glowColorHex: String? = null,
+  val clearGlow: Boolean = false,
+  val glowIntensity: Float? = null,
+  val shadowEnabled: Boolean? = null,
+  val shadowIntensity: Float? = null,
+  val shadowColorHex: String? = null,
+  val backgroundColorHex: String? = null,
+  val clearBackground: Boolean = false,
+  val backgroundAlpha: Float? = null,
+  val backgroundCornerRadiusDp: Float? = null,
+  val depthLayer: DepthLayer? = null,
+  val safeRegion: SafeRegion? = null,
 )
 
 @Serializable

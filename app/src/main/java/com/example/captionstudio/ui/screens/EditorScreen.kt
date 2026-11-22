@@ -100,7 +100,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionProject
+import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.PreviewQualityMode
@@ -132,7 +134,7 @@ import kotlin.math.max
 
 private enum class EditorTool(val label: String, val tag: String) {
   STYLE("Style", "editor_tool_style"),
-  THEME("Theme", "editor_tool_theme"),
+  THEME("Customize", "editor_tool_theme"),
   FONT("Font", "editor_tool_font"),
   TIMING("Timing", "editor_tool_timing"),
 }
@@ -179,7 +181,10 @@ fun EditorScreen(
   onDeleteComposition: (String) -> Unit,
   onAddCustomElement: (String, String, FontRole) -> Unit,
   onUpdateElementText: (String, String, String) -> Unit,
-  onQuickColorElement: (String, String, String) -> Unit,
+  onDeleteElement: (String, String) -> Unit = { _, _ -> },
+  onPatchElementStyle: (String, String, ApplyScope, ElementStylePatch, Boolean) -> Unit,
+  onResetElementStyle: (String, String) -> Unit = { _, _ -> },
+  fontsVersion: Int = 0,
   onToggleDepthMask: (String) -> Unit = {},
   onApplyPreset: (String) -> Unit = {},
   onApplyPairing: (CuratedFontPairing) -> Unit = {},
@@ -200,6 +205,7 @@ fun EditorScreen(
   var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
   var showFullscreenPreview by remember { mutableStateOf(false) }
   var activeTool by remember { mutableStateOf(EditorTool.STYLE) }
+  var applyScope by remember { mutableStateOf(ApplyScope.SINGLE_ELEMENT) }
   var showAddElementDialog by remember { mutableStateOf(false) }
   var editingWordIndex by remember { mutableStateOf<Int?>(null) }
 
@@ -596,11 +602,28 @@ fun EditorScreen(
                 StyleQuickPanel(
                   project = project,
                   activeComp = activeComp,
+                  selectedElementId = selectedElementId,
+                  applyScope = applyScope,
+                  fontsVersion = fontsVersion,
                   isBusy = isBusy,
                   autoTranscribeState = autoTranscribeState,
                   geminiSettings = geminiSettings,
+                  onSelectElement = { elId -> activeComp?.let { onSelectElement(it.id, elId) } },
+                  onScopeChange = { applyScope = it },
+                  onSelectFontForLayer = { elId, fontId ->
+                    activeComp?.let { comp ->
+                      onPatchElementStyle(
+                        comp.id,
+                        elId,
+                        applyScope,
+                        ElementStylePatch(fontFamilyId = fontId),
+                        true,
+                      )
+                    }
+                  },
                   onApplyPreset = onApplyPreset,
                   onOpenPresets = onOpenPresets,
+                  onOpenFontTab = { activeTool = EditorTool.FONT },
                   onGenerate = onGenerateCompositions,
                   onAutoTranscribe = onAutoTranscribeVideo,
                   onSelectComposition = { comp ->
@@ -615,12 +638,23 @@ fun EditorScreen(
                 ThemeWorkspacePanel(
                   activeComp = activeComp,
                   selectedElementId = selectedElementId,
+                  applyScope = applyScope,
+                  onScopeChange = { applyScope = it },
                   onSelectElement = { elId -> activeComp?.let { onSelectElement(it.id, elId) } },
+                  onAddElement = { if (activeComp != null) showAddElementDialog = true },
                   onUpdateElementText = { elId, text ->
                     activeComp?.let { onUpdateElementText(it.id, elId, text) }
                   },
-                  onQuickColor = { elId, hex ->
-                    activeComp?.let { onQuickColorElement(it.id, elId, hex) }
+                  onDeleteElement = { elId ->
+                    activeComp?.let { onDeleteElement(it.id, elId) }
+                  },
+                  onPatchStyle = { elId, patch, record ->
+                    activeComp?.let { comp ->
+                      onPatchElementStyle(comp.id, elId, applyScope, patch, record)
+                    }
+                  },
+                  onResetElementStyle = { elId ->
+                    activeComp?.let { comp -> onResetElementStyle(comp.id, elId) }
                   },
                   onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
                   onOpenTypographyStudio = onOpenTypography,
@@ -630,6 +664,21 @@ fun EditorScreen(
               EditorTool.FONT ->
                 FontWorkspacePanel(
                   project = project,
+                  activeComp = activeComp,
+                  selectedElementId = selectedElementId,
+                  applyScope = applyScope,
+                  fontsVersion = fontsVersion,
+                  onScopeChange = { applyScope = it },
+                  onSelectElement = { elId -> activeComp?.let { onSelectElement(it.id, elId) } },
+                  onAddElement = { if (activeComp != null) showAddElementDialog = true },
+                  onPatchStyle = { elId, patch, record ->
+                    activeComp?.let { comp ->
+                      onPatchElementStyle(comp.id, elId, applyScope, patch, record)
+                    }
+                  },
+                  onResetElementStyle = { elId ->
+                    activeComp?.let { comp -> onResetElementStyle(comp.id, elId) }
+                  },
                   onApplyPairing = onApplyPairing,
                   onOpenTypographyStudio = onOpenTypography,
                 )

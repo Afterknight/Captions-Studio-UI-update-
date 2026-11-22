@@ -78,8 +78,10 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CaptionProject
+import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.StudioPalette
@@ -91,9 +93,14 @@ import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.presets.PresetCatalog
 import com.example.captionstudio.typography.CuratedFontPairing
 import com.example.captionstudio.typography.FontRegistry
+import com.example.captionstudio.ui.components.AccessibleSliderControl
+import com.example.captionstudio.ui.components.ActiveLayerSelectorBar
 import com.example.captionstudio.ui.components.AutoTranscribeControlCard
+import com.example.captionstudio.ui.components.HorizontalFontSelectorStrip
 import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.StudioSubtlePill
+import com.example.captionstudio.ui.components.StyleGlyphToggle
+import com.example.captionstudio.ui.components.TypographyInspectorDeck
 import com.example.captionstudio.ui.components.studioPressScale
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
@@ -109,6 +116,9 @@ import com.example.ui.theme.StudioSuccess
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
 import com.example.ui.theme.StudioWarning
+import androidx.compose.material.icons.rounded.FormatItalic
+import androidx.compose.material.icons.rounded.FormatUnderlined
+import kotlin.math.roundToInt
 
 /**
  * Signature "Caption Style" glass card matching the reference mockup with stylized Aa tiles
@@ -118,16 +128,27 @@ import com.example.ui.theme.StudioWarning
 internal fun StyleQuickPanel(
   project: CaptionProject,
   activeComp: CaptionComposition?,
+  selectedElementId: String?,
+  applyScope: ApplyScope,
+  fontsVersion: Int,
   isBusy: Boolean,
   autoTranscribeState: AutoTranscribeUiState,
   geminiSettings: GeminiSettings,
+  onSelectElement: (String) -> Unit,
+  onScopeChange: (ApplyScope) -> Unit,
+  onSelectFontForLayer: (String, String) -> Unit,
   onApplyPreset: (String) -> Unit,
   onOpenPresets: () -> Unit,
+  onOpenFontTab: () -> Unit,
   onGenerate: (Boolean) -> Unit,
   onAutoTranscribe: (Boolean) -> Unit,
   onSelectComposition: (CaptionComposition) -> Unit,
   onOpenTimingTab: () -> Unit,
 ) {
+  val activeEl =
+    activeComp?.elements?.firstOrNull { it.id == selectedElementId }
+      ?: activeComp?.elements?.firstOrNull()
+
   Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
     // Primary "Caption Style" Card matching reference mockup
     StudioGlassCard(
@@ -199,6 +220,84 @@ internal fun StyleQuickPanel(
               onClick = { onApplyPreset(preset.id) },
             )
           }
+        }
+      }
+    }
+
+    // Immediate Horizontal Scrolling Font Selector for the Selected Kinetic Layer
+    if (activeComp != null && activeEl != null) {
+      StudioGlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = 22.dp,
+        containerColor = Color(0xFF111115),
+        borderColor = StudioHairline,
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(14.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            val activeFont = remember(activeEl.fontFamilyId, fontsVersion) { FontRegistry.findById(activeEl.fontFamilyId) }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Layer Typeface",
+                style = MaterialTheme.typography.titleSmall,
+                color = StudioTextPrimary,
+              )
+              Text(
+                text = "\"${activeEl.text}\" • ${activeFont.displayName}",
+                style = MaterialTheme.typography.labelSmall,
+                color = StudioCoralLight,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier =
+                Modifier.clip(CircleShape)
+                  .clickable(onClick = onOpenFontTab)
+                  .padding(horizontal = 8.dp, vertical = 4.dp)
+                  .testTag("style_open_font_panel_button"),
+            ) {
+              Text(
+                text = "More",
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioTextSecondary,
+              )
+              Spacer(Modifier.width(3.dp))
+              Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = "Open full font controls",
+                tint = StudioTextSecondary,
+                modifier = Modifier.size(14.dp),
+              )
+            }
+          }
+
+          if (activeComp.elements.size > 1) {
+            ActiveLayerSelectorBar(
+              activeComp = activeComp,
+              activeEl = activeEl,
+              applyScope = applyScope,
+              onSelectElement = onSelectElement,
+              onScopeChange = onScopeChange,
+            )
+          }
+
+          HorizontalFontSelectorStrip(
+            selectedFontId = activeEl.fontFamilyId,
+            onSelectFont = { fontId -> onSelectFontForLayer(activeEl.id, fontId) },
+            fontsVersion = fontsVersion,
+            showRoleFilters = false,
+            compact = true,
+            previewItalic = activeEl.isItalic,
+            previewUppercase = activeEl.uppercase,
+          )
         }
       }
     }
@@ -468,15 +567,22 @@ private fun CaptionStyleTile(
 }
 
 /**
- * Theme & Element Color Panel (Tool Tile 2: Theme)
+ * Complete Kinetic Typography Customizer (Tool Tile 2: Customize)
+ * Organizes every typography property into 4 calm segmented tabs (`Text | Color | Effects | Layout`)
+ * so everything is customizable and accessible without feeling cluttered.
  */
 @Composable
 internal fun ThemeWorkspacePanel(
   activeComp: CaptionComposition?,
   selectedElementId: String?,
+  applyScope: ApplyScope,
+  onScopeChange: (ApplyScope) -> Unit,
   onSelectElement: (String) -> Unit,
+  onAddElement: () -> Unit,
   onUpdateElementText: (String, String) -> Unit,
-  onQuickColor: (String, String) -> Unit,
+  onDeleteElement: (String) -> Unit,
+  onPatchStyle: (String, ElementStylePatch, Boolean) -> Unit,
+  onResetElementStyle: (String) -> Unit,
   onToggleDepthMask: () -> Unit,
   onOpenTypographyStudio: () -> Unit,
   onOpenPresets: () -> Unit,
@@ -490,7 +596,7 @@ internal fun ThemeWorkspacePanel(
       ) {
         Text("No caption selected", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
         Text(
-          "Generate or select a caption to customize colors, element wording, and subject depth.",
+          "Generate or select a caption to customize colors, outlines, shadows, glow, spacing, and depth.",
           style = MaterialTheme.typography.bodySmall,
           color = StudioTextSecondary,
         )
@@ -505,122 +611,27 @@ internal fun ThemeWorkspacePanel(
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
     StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
       Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(
-          text = "Select Word Element",
-          style = MaterialTheme.typography.labelMedium,
-          color = StudioTextSecondary,
+        ActiveLayerSelectorBar(
+          activeComp = activeComp,
+          activeEl = activeEl,
+          applyScope = applyScope,
+          onSelectElement = onSelectElement,
+          onScopeChange = onScopeChange,
+          onAddElement = onAddElement,
+          onResetStyle = activeEl?.let { el -> { onResetElementStyle(el.id) } },
         )
-        Row(
-          modifier = Modifier.horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          activeComp.elements.forEach { el ->
-            val chosen = el.id == activeEl?.id
-            FilterChip(
-              selected = chosen,
-              onClick = { onSelectElement(el.id) },
-              label = { Text(el.text, maxLines = 1) },
-              shape = CircleShape,
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = StudioCoralContainer,
-                  selectedLabelColor = StudioCoralLight,
-                ),
-            )
-          }
-        }
 
         if (activeEl != null) {
-          var elementText by remember(activeEl.id, activeEl.text) { mutableStateOf(activeEl.text) }
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            OutlinedTextField(
-              value = elementText,
-              onValueChange = { elementText = it },
-              label = { Text("Caption text") },
-              singleLine = true,
-              shape = RoundedCornerShape(14.dp),
-              colors =
-                OutlinedTextFieldDefaults.colors(
-                  focusedBorderColor = StudioCoral,
-                  unfocusedBorderColor = StudioBorder,
-                  focusedLabelColor = StudioCoral,
-                  cursorColor = StudioCoral,
-                ),
-              modifier = Modifier.weight(1f),
-            )
-            Button(
-              onClick = { onUpdateElementText(activeEl.id, elementText) },
-              shape = CircleShape,
-              colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-              modifier = Modifier.height(50.dp),
-            ) {
-              Text("Update", fontWeight = FontWeight.SemiBold)
-            }
-          }
-
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-              text = "Accent Color",
-              style = MaterialTheme.typography.labelMedium,
-              color = StudioTextSecondary,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-              listOf(
-                StudioPalette.WHITE,
-                StudioPalette.YELLOW,
-                StudioPalette.ORANGE,
-                StudioPalette.RED,
-                StudioPalette.CYAN,
-              ).forEach { hex ->
-                val isSelectedColor = activeEl.colorHex.equals(hex, true)
-                Box(
-                  modifier =
-                    Modifier.size(40.dp)
-                      .clip(CircleShape)
-                      .background(Color(android.graphics.Color.parseColor(hex)))
-                      .border(
-                        width = if (isSelectedColor) 3.dp else 1.dp,
-                        color = if (isSelectedColor) StudioCoral else StudioHairlineStrong,
-                        shape = CircleShape,
-                      )
-                      .clickable { onQuickColor(activeEl.id, hex) }
-                )
-              }
-            }
-          }
-        }
-
-        // Depth Mask Toggle
-        Row(
-          modifier =
-            Modifier.fillMaxWidth()
-              .clip(RoundedCornerShape(14.dp))
-              .background(StudioElevated)
-              .padding(horizontal = 14.dp, vertical = 10.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text("Place Behind Subject", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
-            Text(
-              "Layers headline behind the speaker using on-device depth segmentation",
-              style = MaterialTheme.typography.bodySmall,
-              color = StudioTextSecondary,
-            )
-          }
-          Switch(
-            checked = activeComp.hasBehindSubjectElements(),
-            onCheckedChange = { onToggleDepthMask() },
-            colors =
-              SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = StudioCoral,
-              ),
-            modifier = Modifier.testTag("toggle_depth_mask_chip"),
+          TypographyInspectorDeck(
+            activeComp = activeComp,
+            activeEl = activeEl,
+            onPatchStyle = { patch, record -> onPatchStyle(activeEl.id, patch, record) },
+            onUpdateText = { newText -> onUpdateElementText(activeEl.id, newText) },
+            onDeleteElement =
+              if (activeComp.elements.size > 1) {
+                { onDeleteElement(activeEl.id) }
+              } else null,
+            onToggleCaptionDepthMask = onToggleDepthMask,
           )
         }
 
@@ -648,107 +659,250 @@ internal fun ThemeWorkspacePanel(
 }
 
 /**
- * Font & Curated Pairing Panel (Tool Tile 3: Font)
+ * Font & Horizontal Typeface Selector Panel (Tool Tile 3: Font)
+ * Lets users browse all bundled & downloaded fonts in a horizontal scrolling strip,
+ * quickly tune size/weight/style, or apply curated 3-font pairings in one tap.
  */
 @Composable
 internal fun FontWorkspacePanel(
   project: CaptionProject,
+  activeComp: CaptionComposition?,
+  selectedElementId: String?,
+  applyScope: ApplyScope,
+  fontsVersion: Int,
+  onScopeChange: (ApplyScope) -> Unit,
+  onSelectElement: (String) -> Unit,
+  onAddElement: () -> Unit,
+  onPatchStyle: (String, ElementStylePatch, Boolean) -> Unit,
+  onResetElementStyle: (String) -> Unit,
   onApplyPairing: (CuratedFontPairing) -> Unit,
   onOpenTypographyStudio: () -> Unit,
 ) {
-  StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Text(
-          text = "Curated Font Pairings",
-          style = MaterialTheme.typography.titleSmall,
-          color = StudioTextPrimary,
-        )
-        StudioSubtlePill(text = "${FontRegistry.bundledFonts.size} offline fonts")
-      }
+  val activeEl =
+    activeComp?.elements?.firstOrNull { it.id == selectedElementId }
+      ?: activeComp?.elements?.firstOrNull()
 
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        FontRegistry.curatedPairings.forEach { pairing ->
-          val isCurrent =
-            project.fontOverrides.heavyFontId == pairing.heavyFontId &&
-              project.fontOverrides.supportingFontId == pairing.supportingFontId
-          val heavyFont = remember(pairing.heavyFontId) { FontRegistry.findById(pairing.heavyFontId) }
-          val expressiveFont = remember(pairing.expressiveFontId) { FontRegistry.findById(pairing.expressiveFontId) }
+  Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    // Card 1: Horizontal Scrolling Font Selector for the Selected Kinetic Layer
+    StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
+      Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (activeComp != null && activeEl != null) {
+          ActiveLayerSelectorBar(
+            activeComp = activeComp,
+            activeEl = activeEl,
+            applyScope = applyScope,
+            onSelectElement = onSelectElement,
+            onScopeChange = onScopeChange,
+            onAddElement = onAddElement,
+            onResetStyle = { onResetElementStyle(activeEl.id) },
+          )
 
-          Box(
-            modifier =
-              Modifier.width(172.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(if (isCurrent) StudioCoralContainer else StudioElevated)
-                .border(
-                  1.dp,
-                  if (isCurrent) StudioCoral else StudioHairline,
-                  RoundedCornerShape(16.dp),
-                )
-                .clickable { onApplyPairing(pairing) }
-                .padding(14.dp),
+          val activeFont =
+            remember(activeEl.fontFamilyId, fontsVersion) {
+              FontRegistry.findById(activeEl.fontFamilyId)
+            }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+              text = "Typeface",
+              style = MaterialTheme.typography.titleSmall,
+              color = StudioTextPrimary,
+            )
+            StudioSubtlePill(text = activeFont.displayName, tint = StudioCoralLight)
+          }
+
+          HorizontalFontSelectorStrip(
+            selectedFontId = activeEl.fontFamilyId,
+            onSelectFont = { fontId ->
+              onPatchStyle(activeEl.id, ElementStylePatch(fontFamilyId = fontId), true)
+            },
+            fontsVersion = fontsVersion,
+            showRoleFilters = true,
+            compact = false,
+            previewItalic = activeEl.isItalic,
+            previewUppercase = activeEl.uppercase,
+          )
+
+          // Quick Typeface Polish Strip (Size + Format Toggles) right under font selector
+          AccessibleSliderControl(
+            label = "Size",
+            valueText = "${activeEl.fontSizeSp.roundToInt()} sp",
+            value = activeEl.fontSizeSp,
+            valueRange = 12f..68f,
+            step = 2f,
+            onValueChange = { onPatchStyle(activeEl.id, ElementStylePatch(fontSizeSp = it), false) },
+            onValueChangeFinished = {
+              onPatchStyle(activeEl.id, ElementStylePatch(fontSizeSp = activeEl.fontSizeSp), true)
+            },
+            testTagPrefix = "font_panel_size",
+          )
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              StyleGlyphToggle(
+                label = "Italic",
+                icon = Icons.Rounded.FormatItalic,
+                selected = activeEl.isItalic,
+                onClick = {
+                  onPatchStyle(activeEl.id, ElementStylePatch(isItalic = !activeEl.isItalic), true)
+                },
+              )
+              StyleGlyphToggle(
+                label = "Uppercase",
+                glyphText = "AA",
+                selected = activeEl.uppercase,
+                onClick = {
+                  onPatchStyle(activeEl.id, ElementStylePatch(uppercase = !activeEl.uppercase), true)
+                },
+              )
+              StyleGlyphToggle(
+                label = "Underline",
+                icon = Icons.Rounded.FormatUnderlined,
+                selected = activeEl.isUnderlined,
+                onClick = {
+                  onPatchStyle(activeEl.id, ElementStylePatch(isUnderlined = !activeEl.isUnderlined), true)
+                },
+              )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              listOf(400 to "Reg", 600 to "Semi", 900 to "Black").forEach { (w, lbl) ->
+                val isSelectedWeight = activeEl.fontWeight == w
+                Box(
+                  modifier =
+                    Modifier.clip(CircleShape)
+                      .background(if (isSelectedWeight) StudioCoralContainer else StudioElevated)
+                      .border(
+                        1.dp,
+                        if (isSelectedWeight) StudioCoral else StudioHairline,
+                        CircleShape,
+                      )
+                      .clickable {
+                        onPatchStyle(activeEl.id, ElementStylePatch(fontWeight = w), true)
+                      }
+                      .padding(horizontal = 10.dp, vertical = 9.dp),
+                ) {
+                  Text(
+                    text = lbl,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelectedWeight) StudioCoralLight else StudioTextPrimary,
+                  )
+                }
+              }
+            }
+          }
+        } else {
+          Text(
+            text = "Select or generate a caption to change individual layer typefaces.",
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioTextSecondary,
+          )
+        }
+      }
+    }
+
+    // Card 2: Curated 3-Font Pairings & Full Browser
+    StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
+      Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "Curated Font Pairings",
+            style = MaterialTheme.typography.titleSmall,
+            color = StudioTextPrimary,
+          )
+          StudioSubtlePill(text = "${FontRegistry.allFonts().size} fonts")
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          FontRegistry.curatedPairings.forEach { pairing ->
+            val isCurrent =
+              project.fontOverrides.heavyFontId == pairing.heavyFontId &&
+                project.fontOverrides.supportingFontId == pairing.supportingFontId
+            val heavyFont = remember(pairing.heavyFontId) { FontRegistry.findById(pairing.heavyFontId) }
+            val expressiveFont = remember(pairing.expressiveFontId) { FontRegistry.findById(pairing.expressiveFontId) }
+
+            Box(
+              modifier =
+                Modifier.width(172.dp)
+                  .clip(RoundedCornerShape(16.dp))
+                  .background(if (isCurrent) StudioCoralContainer else StudioElevated)
+                  .border(
+                    1.dp,
+                    if (isCurrent) StudioCoral else StudioHairline,
+                    RoundedCornerShape(16.dp),
+                  )
+                  .clickable { onApplyPairing(pairing) }
+                  .padding(14.dp),
+            ) {
+              Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                  Text(
+                    text = "Aa",
+                    fontFamily = heavyFont.composeFontFamily,
+                    fontSize = 24.sp,
+                    color = StudioTextPrimary,
+                  )
+                  Text(
+                    text = "script",
+                    fontFamily = expressiveFont.composeFontFamily,
+                    fontStyle = FontStyle.Italic,
+                    fontSize = 16.sp,
+                    color = StudioCoralLight,
+                  )
+                }
                 Text(
-                  text = "Aa",
-                  fontFamily = heavyFont.composeFontFamily,
-                  fontSize = 24.sp,
-                  color = StudioTextPrimary,
+                  text = pairing.name,
+                  style = MaterialTheme.typography.titleSmall,
+                  color = if (isCurrent) StudioCoralLight else StudioTextPrimary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                  text = "script",
-                  fontFamily = expressiveFont.composeFontFamily,
-                  fontStyle = FontStyle.Italic,
-                  fontSize = 16.sp,
-                  color = StudioCoralLight,
+                  text = pairing.subtitle,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = StudioTextSecondary,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
                 )
               }
-              Text(
-                text = pairing.name,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (isCurrent) StudioCoralLight else StudioTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = pairing.subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = StudioTextSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-              )
             }
           }
         }
-      }
 
-      OutlinedButton(
-        onClick = onOpenTypographyStudio,
-        shape = CircleShape,
-        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_typography_studio_button"),
-      ) {
-        Text(
-          text = "Open Full Typography & Font Browser",
-          color = StudioTextPrimary,
-          fontWeight = FontWeight.Medium,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.width(6.dp))
-        Icon(
-          Icons.AutoMirrored.Rounded.ArrowForward,
-          contentDescription = null,
-          tint = StudioCoral,
-          modifier = Modifier.size(16.dp),
-        )
+        OutlinedButton(
+          onClick = onOpenTypographyStudio,
+          shape = CircleShape,
+          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_typography_studio_button"),
+        ) {
+          Text(
+            text = "Open Full Typography & Font Downloader",
+            color = StudioTextPrimary,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Spacer(Modifier.width(6.dp))
+          Icon(
+            Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = null,
+            tint = StudioCoral,
+            modifier = Modifier.size(16.dp),
+          )
+        }
       }
     }
   }
