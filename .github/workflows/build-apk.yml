@@ -30,8 +30,56 @@ jobs:
             yes | "$SDKMANAGER" --licenses > /dev/null || true
           fi
 
-      - name: Decode debug keystore
-        run: tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+      - name: Prepare debug keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          verify_keystore() {
+            [ -s debug.keystore ] || return 1
+            rm -f /tmp/verify_debug.p12
+            if keytool -importkeystore \
+              -srckeystore debug.keystore \
+              -srcstorepass android \
+              -srcalias androiddebugkey \
+              -srckeypass android \
+              -destkeystore /tmp/verify_debug.p12 \
+              -deststorepass android \
+              -destkeypass android \
+              -noprompt >/dev/null 2>&1; then
+              rm -f /tmp/verify_debug.p12
+              return 0
+            fi
+            rm -f /tmp/verify_debug.p12
+            return 1
+          }
+
+          rm -f debug.keystore
+
+          # 1. Try optional GitHub Actions secret if configured
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore 2>/dev/null || true
+          fi
+
+          # 2. Otherwise try decoding debug.keystore.base64 from the repository
+          if ! verify_keystore && [ -s debug.keystore.base64 ]; then
+            tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore 2>/dev/null || true
+          fi
+
+          # 3. Fallback: generate a fresh valid PKCS12 debug keystore
+          if ! verify_keystore; then
+            echo "debug.keystore.base64 is missing or unreadable; generating a fresh debug.keystore..."
+            rm -f debug.keystore
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storetype PKCS12 \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
