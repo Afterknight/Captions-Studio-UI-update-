@@ -474,4 +474,203 @@ class CaptionStudioEngineTest {
     assertTrue(report.preset.strokeWidthFactor > 0f)
     assertTrue(report.preset.backgroundPillColorHex != null)
   }
+
+  @Test
+  fun `frame-aware offline engine enforces shot-level stability and vetoes face zones`() {
+    val preset = PresetCatalog.findById("editorial")
+    val shot1 =
+      com.example.captionstudio.domain.model.ShotVisualAnalysis(
+        startMs = 0L,
+        endMs = 4000L,
+        headVetoRect = com.example.captionstudio.domain.model.NormalizedRect(0.30f, 0.14f, 0.70f, 0.44f),
+        subjectCentroidX = 0.50f,
+        subjectCentroidY = 0.45f,
+        subjectCoverage = 0.24f,
+        zoneMetrics =
+          mapOf(
+            SafeRegion.UPPER_CENTER to
+              com.example.captionstudio.domain.model.ZoneVisualMetrics(
+                edgeClutter = 28f,
+                meanLuminance = 130f,
+                isBlockedByFace = true,
+                isBlockedBySubject = true,
+              ),
+            SafeRegion.LOWER_CENTER to
+              com.example.captionstudio.domain.model.ZoneVisualMetrics(
+                edgeClutter = 8f,
+                meanLuminance = 52f,
+                isBlockedByFace = false,
+                isBlockedBySubject = false,
+              ),
+            SafeRegion.CENTER to
+              com.example.captionstudio.domain.model.ZoneVisualMetrics(
+                edgeClutter = 20f,
+                meanLuminance = 95f,
+                isBlockedByFace = false,
+                isBlockedBySubject = true,
+              ),
+          ),
+        preferredZone = SafeRegion.LOWER_CENTER,
+      )
+    val shot2 =
+      com.example.captionstudio.domain.model.ShotVisualAnalysis(
+        startMs = 4000L,
+        endMs = 8000L,
+        headVetoRect = com.example.captionstudio.domain.model.NormalizedRect(0.30f, 0.56f, 0.70f, 0.86f),
+        subjectCentroidX = 0.50f,
+        subjectCentroidY = 0.70f,
+        subjectCoverage = 0.22f,
+        zoneMetrics =
+          mapOf(
+            SafeRegion.UPPER_CENTER to
+              com.example.captionstudio.domain.model.ZoneVisualMetrics(
+                edgeClutter = 6f,
+                meanLuminance = 44f,
+                isBlockedByFace = false,
+                isBlockedBySubject = false,
+              ),
+            SafeRegion.LOWER_CENTER to
+              com.example.captionstudio.domain.model.ZoneVisualMetrics(
+                edgeClutter = 32f,
+                meanLuminance = 140f,
+                isBlockedByFace = true,
+                isBlockedBySubject = true,
+              ),
+          ),
+        preferredZone = SafeRegion.UPPER_CENTER,
+      )
+    val report =
+      VideoAnalysisReport(
+        frameCountSampled = 8,
+        sceneChangeTimestampsMs = listOf(4000L),
+        subjectCoverageFraction = 0.23f,
+        shotAnalyses = listOf(shot1, shot2),
+      )
+
+    val phrases =
+      listOf(
+        listOf(WordTiming("First", 200L, 600L), WordTiming("phrase", 650L, 1200L)),
+        listOf(WordTiming("Second", 1500L, 2100L), WordTiming("line", 2150L, 2800L)),
+        listOf(WordTiming("After", 4400L, 5100L), WordTiming("cut", 5150L, 6000L)),
+      )
+    val comps = LocalCompositionEngine.generateCompositionsFromPhrases(phrases, preset, report)
+    assertEquals(3, comps.size)
+    // Both phrases in shot 1 stay anchored in the clean Lower Center (never Upper Center face veto)
+    assertEquals(SafeRegion.LOWER_CENTER, comps[0].region)
+    assertEquals(SafeRegion.LOWER_CENTER, comps[1].region)
+    // After the scene cut at 4000ms, shot 2 shifts intentionally to clean Upper Center
+    assertEquals(SafeRegion.UPPER_CENTER, comps[2].region)
+  }
+
+  @Test
+  fun `auto readability guard boosts contrast on bright busy background and leaves clean dark zones untouched`() {
+    val baseEl =
+      CompositionElement(
+        id = "e1",
+        text = "Clarity",
+        role = FontRole.HEAVY,
+        hierarchyLevel = HierarchyLevel.DOMINANT,
+        fontFamilyId = "anton",
+        fontSizeSp = 40f,
+        strokeWidthFactor = 0f,
+        shadowIntensity = 0.9f,
+        backgroundColorHex = null,
+      )
+
+    val cleanDark =
+      com.example.captionstudio.domain.model.ZoneVisualMetrics(
+        edgeClutter = 6f,
+        meanLuminance = 45f,
+      )
+    val untouched = LocalCompositionEngine.applyAutoReadabilityGuard(listOf(baseEl), cleanDark)
+    assertEquals(0f, untouched[0].strokeWidthFactor, 0.001f)
+    assertEquals(null, untouched[0].backgroundColorHex)
+
+    val brightBusy =
+      com.example.captionstudio.domain.model.ZoneVisualMetrics(
+        edgeClutter = 34f,
+        meanLuminance = 205f,
+      )
+    val guarded = LocalCompositionEngine.applyAutoReadabilityGuard(listOf(baseEl), brightBusy)
+    assertTrue("Expected boosted outline stroke", guarded[0].strokeWidthFactor >= 1.6f)
+    assertEquals("#101016", guarded[0].strokeColorHex)
+    assertTrue("Expected boosted shadow intensity", guarded[0].shadowIntensity >= 1.6f)
+    assertEquals("#121218", guarded[0].backgroundColorHex)
+  }
+
+  @Test
+  fun `subject mask processor computes centroid and upper head veto rect from probability map`() {
+    val w = 40
+    val h = 60
+    val probs = FloatArray(w * h)
+    // Place a centered standing speaker silhouette in x=12..27, y=10..55
+    for (y in 10..55) {
+      for (x in 12..27) {
+        probs[y * w + x] = 0.92f
+      }
+    }
+    val metrics =
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMetricsFromProbabilityMap(
+        probs = probs,
+        width = w,
+        height = h,
+      )
+    assertTrue("Coverage should be meaningful", metrics.coverageFraction > 0.25f)
+    assertEquals(0.49f, metrics.centroidX, 0.06f)
+    assertTrue("Head veto rect must be computed", metrics.headVetoRect != null)
+    val head = metrics.headVetoRect!!
+    assertTrue("Head veto top should start near top of silhouette", head.top <= 0.22f)
+    assertTrue("Head veto bottom should cover eyes/mouth zone", head.bottom >= 0.35f)
+  }
+
+  @Test
+  fun `gemini client builds resilient fallback model cascade and flags 503 as transient busy`() {
+    val cascade =
+      com.example.captionstudio.ai.GeminiApiClient.buildFallbackModelCascade("models/gemini-2.5-flash")
+    assertEquals("models/gemini-2.5-flash", cascade.first())
+    assertTrue("Cascade should contain backup models", cascade.size >= 3)
+    assertTrue(
+      "Cascade should include fast lite backup model",
+      cascade.any { it.contains("gemini-2.5-flash-lite") || it.contains("gemini-2.0-flash") },
+    )
+    assertEquals(cascade.distinct().size, cascade.size)
+
+    val err503 = com.example.captionstudio.ai.GeminiApiClient.mapHttpError(503, "Service Unavailable")
+    assertEquals(503, err503.httpCode)
+    assertTrue("HTTP 503 must be marked transient busy", err503.isTransientBusy)
+
+    val err429 = com.example.captionstudio.ai.GeminiApiClient.mapHttpError(429, "Quota exceeded")
+    assertEquals(429, err429.httpCode)
+    assertTrue("HTTP 429 must be marked transient busy", err429.isTransientBusy)
+
+    val err401 = com.example.captionstudio.ai.GeminiApiClient.mapHttpError(401, "Invalid key")
+    assertEquals(401, err401.httpCode)
+    assertTrue("HTTP 401 should not be transient busy", !err401.isTransientBusy)
+  }
+
+  @Test
+  fun `validator scales down oversized multi-word phrase containing a long token`() {
+    val comp =
+      CaptionComposition(
+        id = "c_long_word",
+        startMs = 0L,
+        endMs = 2000L,
+        originalText = "Extraordinary cinematography",
+        elements =
+          listOf(
+            CompositionElement(
+              id = "e_long",
+              text = "Extraordinary cinematography",
+              role = FontRole.HEAVY,
+              hierarchyLevel = HierarchyLevel.DOMINANT,
+              fontFamilyId = "anton",
+              fontSizeSp = 64f,
+              uppercase = true,
+            )
+          ),
+      )
+    val fixed = CompositionValidator.validateAndRepair(null, listOf(comp))
+    val scaledSize = fixed.first().elements.first().fontSizeSp
+    assertTrue("Expected validator to shrink oversized 14-char token below 50sp, was $scaledSize", scaledSize < 50f)
+  }
 }

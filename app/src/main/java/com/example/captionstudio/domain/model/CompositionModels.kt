@@ -395,6 +395,30 @@ data class VideoMetadata(
 
 @Immutable
 @Serializable
+data class ZoneVisualMetrics(
+  val edgeClutter: Float = 0f,
+  val meanLuminance: Float = 96f,
+  val isBlockedByFace: Boolean = false,
+  val isBlockedBySubject: Boolean = false,
+  val isWideAndEmpty: Boolean = false,
+)
+
+@Immutable
+@Serializable
+data class ShotVisualAnalysis(
+  val startMs: Long = 0L,
+  val endMs: Long = Long.MAX_VALUE,
+  val headVetoRect: NormalizedRect? = null,
+  val subjectCentroidX: Float = 0.5f,
+  val subjectCentroidY: Float = 0.55f,
+  val subjectCoverage: Float = 0f,
+  val isSplitScreen: Boolean = false,
+  val zoneMetrics: Map<SafeRegion, ZoneVisualMetrics> = emptyMap(),
+  val preferredZone: SafeRegion = SafeRegion.LOWER_CENTER,
+)
+
+@Immutable
+@Serializable
 data class VideoAnalysisReport(
   val frameCountSampled: Int = 0,
   val sceneChangeTimestampsMs: List<Long> = emptyList(),
@@ -412,6 +436,7 @@ data class VideoAnalysisReport(
   val analyzedWithGemini: Boolean = false,
   val subjectCoverageFraction: Float = 0f,
   val isSplitScreenDetected: Boolean = false,
+  val shotAnalyses: List<ShotVisualAnalysis> = emptyList(),
 )
 
 @Immutable

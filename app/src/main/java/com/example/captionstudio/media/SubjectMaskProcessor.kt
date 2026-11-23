@@ -36,12 +36,21 @@ import kotlinx.coroutines.withContext
  */
 object SubjectMaskProcessor {
 
-  private const val MASK_MAX_DIM_HQ = 384
+  private const val MASK_MAX_DIM_EXPORT_HQ = 448
+  private const val MASK_MAX_DIM_LIVE_HQ = 352
   private const val MASK_MAX_DIM_PERF = 256
   private const val CACHE_BUCKET_MS = 33L // Up to 30fps bucket resolution
   private const val SCENE_CUT_SAD_THRESHOLD = 42.0f
   private const val HIGH_MOTION_SAD_THRESHOLD = 15.5f
   private const val STILL_FRAME_SAD_THRESHOLD = 4.2f
+
+  data class SubjectMaskMetrics(
+    val coverageFraction: Float,
+    val centroidX: Float,
+    val centroidY: Float,
+    val boundingBox: com.example.captionstudio.domain.model.NormalizedRect?,
+    val headVetoRect: com.example.captionstudio.domain.model.NormalizedRect?,
+  )
 
   private val streamSegmenter: Segmenter by lazy {
     val options =
@@ -62,7 +71,7 @@ object SubjectMaskProcessor {
   }
 
   private val maskCache =
-    object : LruCache<String, Bitmap>(42) {
+    object : LruCache<String, Bitmap>(48) {
       override fun entryRemoved(
         evicted: Boolean,
         key: String?,
@@ -88,7 +97,15 @@ object SubjectMaskProcessor {
     val bucket = bucketForPosition(positionMs)
     return maskCache.get("$videoKey:$bucket")
       ?: maskCache.get("$videoKey:${(bucket - 1).coerceAtLeast(0L)}")
-      ?: maskCache.get("$videoKey:${bucket + 1}")
+  }
+
+  fun invalidatePreviewTemporalState() {
+    synchronized(temporalLock) {
+      lastPreviewFingerprint = null
+      lastPreviewProbs = null
+      lastPreviewBitmap = null
+      lastPreviewPosMs = -1L
+    }
   }
 
   fun clearCache() {
@@ -161,7 +178,7 @@ object SubjectMaskProcessor {
       synchronized(temporalLock) {
         val sameVideo = lastPreviewVideoKey == videoKey
         val timeGapMs = abs(positionMs - lastPreviewPosMs)
-        if (sameVideo && lastPreviewFingerprint != null && timeGapMs <= 160L) {
+        if (sameVideo && lastPreviewFingerprint != null && timeGapMs <= 140L) {
           motionSad = frameDifferenceSad(lastPreviewFingerprint!!, fingerprint)
           sceneCut = motionSad >= SCENE_CUT_SAD_THRESHOLD
           if (!sceneCut && motionSad < STILL_FRAME_SAD_THRESHOLD && lastPreviewBitmap != null && !lastPreviewBitmap!!.isRecycled) {
@@ -189,7 +206,7 @@ object SubjectMaskProcessor {
         maskCache.get(cacheId)?.let { return@withContext it }
       }
 
-      val maxDim = if (highPrecision) MASK_MAX_DIM_HQ else MASK_MAX_DIM_PERF
+      val maxDim = if (highPrecision) MASK_MAX_DIM_LIVE_HQ else MASK_MAX_DIM_PERF
       val downscaled = downscaleForSegmentation(frameBitmap, maxDim)
       val raw = runSegmenterRawAsync(streamSegmenter, downscaled)
       if (raw == null) {
@@ -207,7 +224,7 @@ object SubjectMaskProcessor {
           temporalWeight =
             when {
               sceneCut || motionSad >= HIGH_MOTION_SAD_THRESHOLD -> 1.0f // Zero lag on cuts / fast hands
-              else -> 0.78f // Smooth hair shimmer during regular talking
+              else -> 0.82f // Tight temporal response during speaking without visible lag
             },
         )
       if (downscaled !== frameBitmap) downscaled.recycle()
@@ -236,7 +253,7 @@ object SubjectMaskProcessor {
     useStillMode: Boolean = true,
     highPrecision: Boolean = true,
   ): Bitmap? {
-    val maxDim = if (highPrecision) MASK_MAX_DIM_HQ else MASK_MAX_DIM_PERF
+    val maxDim = if (highPrecision) MASK_MAX_DIM_EXPORT_HQ else MASK_MAX_DIM_PERF
     val downscaled = downscaleForSegmentation(frameBitmap, maxDim)
     val raw = runSegmenterRawBlocking(if (useStillMode) stillSegmenter else streamSegmenter, downscaled)
     val result =
@@ -254,17 +271,102 @@ object SubjectMaskProcessor {
     return result
   }
 
-  fun estimateSubjectCoverage(frameBitmap: Bitmap): Float {
-    val downscaled = downscaleForSegmentation(frameBitmap, 160)
+  /**
+   * Computes subject coverage, centroid, full silhouette bounding box, and an upper head/face
+   * veto zone directly from the offline segmentation mask. Works reliably even in side-profile
+   * shots where traditional frontal FaceDetector misses the speaker's face.
+   */
+  fun analyzeSubjectMetrics(frameBitmap: Bitmap): SubjectMaskMetrics {
+    val downscaled = downscaleForSegmentation(frameBitmap, 192)
     val raw = runSegmenterRawBlocking(stillSegmenter, downscaled)
     if (downscaled !== frameBitmap) downscaled.recycle()
-    if (raw == null || raw.probs.isEmpty()) return 0f
-    var fg = 0
-    for (p in raw.probs) {
-      if (p >= 0.55f) fg++
+    if (raw == null || raw.probs.isEmpty()) {
+      return SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
     }
-    return fg.toFloat() / raw.probs.size.toFloat()
+    return computeMetricsFromProbabilityMap(raw.probs, raw.width, raw.height)
   }
+
+  internal fun computeMetricsFromProbabilityMap(
+    probs: FloatArray,
+    width: Int,
+    height: Int,
+  ): SubjectMaskMetrics {
+    if (width <= 0 || height <= 0 || probs.isEmpty()) {
+      return SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
+    }
+    var fgCount = 0
+    var sumX = 0f
+    var sumY = 0f
+    var minX = width
+    var maxX = -1
+    var minY = height
+    var maxY = -1
+
+    for (y in 0 until height) {
+      val row = y * width
+      for (x in 0 until width) {
+        if (probs[row + x] >= 0.55f) {
+          fgCount++
+          sumX += x
+          sumY += y
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+
+    val total = (width * height).coerceAtLeast(1)
+    val coverage = fgCount.toFloat() / total.toFloat()
+    if (fgCount < (total * 0.015f).toInt() || maxX < minX || maxY < minY) {
+      return SubjectMaskMetrics(coverage, 0.5f, 0.55f, null, null)
+    }
+
+    val cx = (sumX / fgCount) / width.toFloat()
+    val cy = (sumY / fgCount) / height.toFloat()
+    val bbox =
+      com.example.captionstudio.domain.model.NormalizedRect(
+        left = (minX.toFloat() / width).coerceIn(0f, 1f),
+        top = (minY.toFloat() / height).coerceIn(0f, 1f),
+        right = ((maxX + 1).toFloat() / width).coerceIn(0f, 1f),
+        bottom = ((maxY + 1).toFloat() / height).coerceIn(0f, 1f),
+      )
+
+    // Estimate upper head/face zone from top 38% of foreground silhouette
+    val headBandEndY = (minY + ((maxY - minY) * 0.38f).toInt()).coerceIn(minY, maxY)
+    var headMinX = width
+    var headMaxX = -1
+    for (y in minY..headBandEndY) {
+      val row = y * width
+      for (x in minX..maxX) {
+        if (probs[row + x] >= 0.60f) {
+          if (x < headMinX) headMinX = x
+          if (x > headMaxX) headMaxX = x
+        }
+      }
+    }
+    val headRect =
+      if (headMaxX >= headMinX) {
+        val hLeft = (headMinX.toFloat() / width - 0.04f).coerceIn(0f, 1f)
+        val hRight = ((headMaxX + 1).toFloat() / width + 0.04f).coerceIn(0f, 1f)
+        val hTop = (minY.toFloat() / height - 0.02f).coerceIn(0f, 1f)
+        val hBottom = ((headBandEndY + 1).toFloat() / height + 0.03f).coerceIn(0f, 1f)
+        com.example.captionstudio.domain.model.NormalizedRect(hLeft, hTop, hRight, hBottom)
+      } else {
+        null
+      }
+
+    return SubjectMaskMetrics(
+      coverageFraction = coverage,
+      centroidX = cx.coerceIn(0f, 1f),
+      centroidY = cy.coerceIn(0f, 1f),
+      boundingBox = bbox,
+      headVetoRect = headRect,
+    )
+  }
+
+  fun estimateSubjectCoverage(frameBitmap: Bitmap): Float = analyzeSubjectMetrics(frameBitmap).coverageFraction
 
   private data class RawMaskOutput(
     val probs: FloatArray,
@@ -326,13 +428,16 @@ object SubjectMaskProcessor {
   }
 
   /**
-   * Core Pixel-Tight Edge Refinement Pass (Pure Kotlin — runs in <2ms on-device & JVM tests).
+   * Upgraded Pixel-Tight Guided Matting & Halo Suppression Pass (Pure Kotlin — ~2-3ms on-device):
    *
    * 1. Bilinearly upsamples raw ML Kit probability map to match [rgbGuideBitmap] dimensions.
-   * 2. Runs a 3x3 Joint-Bilateral RGB-guided filter strictly on the narrow silhouette boundary band
-   *    (`0.10..0.90`), snapping alpha transitions tightly to true hair/skin/cloth RGB gradients.
-   * 3. Applies smoothstep anti-aliasing (`0.38..0.72`) to kill soft halo bleed around occluded text.
-   * 4. Optionally applies temporal EMA blending on low-motion frames to eliminate hair flicker.
+   * 2. Runs a 5x5 sparse edge-aware Joint-Bilateral RGB-guided filter strictly on the silhouette
+   *    uncertainty band (`0.06..0.94`), locking hair, ears, shoulders, and hands to true RGB edges.
+   * 3. Runs morphological outer-fringe halo suppression: compares borderline pixels (`0.12..0.48`)
+   *    against nearby definite foreground vs definite background RGB samples and suppresses pixels
+   *    that belong visually to the background, eliminating chunky halos.
+   * 4. Applies a tight S-curve smoothstep ramp (`0.42..0.74`) for crisp occlusion with clean AA.
+   * 5. Optionally applies temporal EMA blending on low-motion frames to eliminate hair shimmer.
    */
   internal fun refineAndBuildAlphaMask(
     rawProbs: FloatArray,
@@ -388,22 +493,25 @@ object SubjectMaskProcessor {
       if (scratchOut != null && scratchOut.size >= count) scratchOut else IntArray(count)
     val refinedProbs = FloatArray(count)
 
-    // Precompute RGB color similarity sigma (approx 24 intensity units per channel)
-    val invTwoSigmaSq = 1f / (2f * 26f * 26f * 3f)
+    // Sharper color sigma (21 intensity units per channel) for crisper hair/shoulder edge lock
+    val invTwoSigmaSq = 1f / (2f * 21f * 21f * 3f)
     val useTemporal = prevProbs != null && prevProbs.size == count && temporalWeight < 0.999f
     var anyForeground = false
 
+    // 13-tap 5x5 sparse kernel offsets (full 3x3 + 4 cardinal radius-2 taps)
+    val kDx = intArrayOf(0, -1, 1, 0, 0, -1, 1, -1, 1, -2, 2, 0, 0)
+    val kDy = intArrayOf(0, 0, 0, -1, 1, -1, -1, 1, 1, 0, 0, -2, 2)
+    val kSw = floatArrayOf(1.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.78f, 0.78f, 0.78f, 0.78f, 0.55f, 0.55f, 0.55f, 0.55f)
+
     for (y in 0 until h) {
       val rowOffset = y * w
-      val yStart = max(0, y - 1)
-      val yEnd = min(h - 1, y + 1)
       for (x in 0 until w) {
         val idx = rowOffset + x
         val centerP = upsampled[idx]
 
-        // Fast-path interior & background pixels: skip bilateral filter completely (>92% of image!)
+        // Fast-path interior & background pixels: skip bilateral filter completely (>90% of image)
         val edgeRefined =
-          if (centerP <= 0.10f || centerP >= 0.90f) {
+          if (centerP <= 0.06f || centerP >= 0.94f) {
             centerP
           } else {
             val cColor = rgbPixels[idx]
@@ -413,24 +521,55 @@ object SubjectMaskProcessor {
 
             var weightedSum = 0f
             var weightTotal = 0f
-            val xStart = max(0, x - 1)
-            val xEnd = min(w - 1, x + 1)
-            for (ny in yStart..yEnd) {
-              val nRow = ny * w
-              for (nx in xStart..xEnd) {
-                val nIdx = nRow + nx
-                val nColor = rgbPixels[nIdx]
-                val dr = ((nColor shr 16) and 0xFF) - cr
-                val dg = ((nColor shr 8) and 0xFF) - cg
-                val db = (nColor and 0xFF) - cb
-                val colorDistSq = (dr * dr + dg * dg + db * db).toFloat()
-                val spatialW = if (nx == x && ny == y) 1.5f else 1.0f
-                val weight = spatialW * exp(-colorDistSq * invTwoSigmaSq)
-                weightedSum += upsampled[nIdx] * weight
-                weightTotal += weight
+            var fgR = 0; var fgG = 0; var fgB = 0; var fgN = 0
+            var bgR = 0; var bgG = 0; var bgB = 0; var bgN = 0
+
+            for (k in kDx.indices) {
+              val nx = x + kDx[k]
+              val ny = y + kDy[k]
+              if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue
+              val nIdx = ny * w + nx
+              val nColor = rgbPixels[nIdx]
+              val nr = (nColor shr 16) and 0xFF
+              val ng = (nColor shr 8) and 0xFF
+              val nb = nColor and 0xFF
+              val nP = upsampled[nIdx]
+
+              val dr = nr - cr
+              val dg = ng - cg
+              val db = nb - cb
+              val colorDistSq = (dr * dr + dg * dg + db * db).toFloat()
+              val weight = kSw[k] * exp(-colorDistSq * invTwoSigmaSq)
+              weightedSum += nP * weight
+              weightTotal += weight
+
+              if (nP >= 0.85f) {
+                fgR += nr; fgG += ng; fgB += nb; fgN++
+              } else if (nP <= 0.15f) {
+                bgR += nr; bgG += ng; bgB += nb; bgN++
               }
             }
-            if (weightTotal > 1e-5f) weightedSum / weightTotal else centerP
+
+            var filtered = if (weightTotal > 1e-5f) weightedSum / weightTotal else centerP
+
+            // Morphological halo suppression on outer low-confidence fringe
+            if (filtered in 0.12f..0.52f && fgN > 0 && bgN > 0) {
+              val dFgR = cr - (fgR / fgN)
+              val dFgG = cg - (fgG / fgN)
+              val dFgB = cb - (fgB / fgN)
+              val distFg = dFgR * dFgR + dFgG * dFgG + dFgB * dFgB
+
+              val dBgR = cr - (bgR / bgN)
+              val dBgG = cg - (bgG / bgN)
+              val dBgB = cb - (bgB / bgN)
+              val distBg = dBgR * dBgR + dBgG * dBgG + dBgB * dBgB
+
+              if (distBg * 1.35f < distFg) {
+                // Pixel visually matches background much closer than subject -> suppress halo fringe
+                filtered *= 0.45f
+              }
+            }
+            filtered
           }
 
         val smoothed =
@@ -441,8 +580,8 @@ object SubjectMaskProcessor {
           }
         refinedProbs[idx] = smoothed
 
-        // Crisp S-curve smoothstep ramp (0.38..0.72) eliminates halo bleed while preserving soft hair AA
-        val t = ((smoothed - 0.38f) / 0.34f).coerceIn(0f, 1f)
+        // Crisp S-curve smoothstep ramp (0.42..0.74) cuts hair/shoulder cleanly without chunky halos
+        val t = ((smoothed - 0.42f) / 0.32f).coerceIn(0f, 1f)
         val smoothAlpha = t * t * (3f - 2f * t)
         val alphaByte = (smoothAlpha * 255f).toInt()
         if (alphaByte > 18) anyForeground = true
@@ -581,12 +720,12 @@ object SubjectMaskProcessor {
           retriever.getScaledFrameAtTime(
             timeUs,
             MediaMetadataRetriever.OPTION_CLOSEST,
-            MASK_MAX_DIM_HQ,
-            MASK_MAX_DIM_HQ,
+            MASK_MAX_DIM_EXPORT_HQ,
+            MASK_MAX_DIM_EXPORT_HQ,
           )
         } else {
           retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)?.let { raw ->
-            val scaled = downscaleForSegmentation(raw, MASK_MAX_DIM_HQ)
+            val scaled = downscaleForSegmentation(raw, MASK_MAX_DIM_EXPORT_HQ)
             if (scaled !== raw) raw.recycle()
             scaled
           }

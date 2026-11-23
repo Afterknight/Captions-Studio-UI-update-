@@ -455,7 +455,10 @@ private fun CloneStyleBannerPill(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.weight(1f),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Icon(
         imageVector = Icons.Rounded.AutoFixHigh,
         contentDescription = null,
@@ -469,9 +472,11 @@ private fun CloneStyleBannerPill(
         fontWeight = FontWeight.SemiBold,
         color = StudioTextPrimary,
         maxLines = 1,
+        softWrap = false,
         overflow = TextOverflow.Ellipsis,
       )
     }
+    Spacer(Modifier.width(8.dp))
     Surface(
       color = StudioCoral.copy(alpha = 0.24f),
       shape = CircleShape,
@@ -482,6 +487,8 @@ private fun CloneStyleBannerPill(
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
         color = StudioCoralLight,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
       )
     }
@@ -719,6 +726,8 @@ internal fun ProjectGalleryCard(
               fontWeight = FontWeight.Medium,
               color = badgeTint,
               maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
             )
           }
         }
@@ -953,13 +962,17 @@ internal fun GalleryEmptyStateCard(
                 .clickable { selectedDemoPresetId = presetId }
                 .testTag("onboarding_style_chip_$presetId"),
           ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+              modifier = Modifier.padding(horizontal = 8.dp),
+              contentAlignment = Alignment.Center,
+            ) {
               Text(
                 text = preset.name,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 color = if (isSelected) StudioCoralLight else StudioTextPrimary,
                 maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis,
               )
             }
@@ -979,7 +992,7 @@ internal fun GalleryEmptyStateCard(
               containerColor = StudioCoral,
               contentColor = Color.White,
             ),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
           modifier =
             Modifier.weight(1.2f)
               .height(48.dp)
@@ -996,6 +1009,7 @@ internal fun GalleryEmptyStateCard(
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
           )
         }

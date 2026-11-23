@@ -3,6 +3,7 @@ package com.example.captionstudio.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -211,7 +213,7 @@ fun AnimationScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
             modifier = Modifier.height(38.dp).testTag("apply_animation_button"),
           ) {
-            Text("Apply", fontWeight = FontWeight.SemiBold)
+            Text("Apply", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
           }
         },
       )
@@ -255,14 +257,17 @@ fun AnimationScreen(
           StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
               Text("Apply To", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 listOf(ApplyScope.SINGLE_COMPOSITION, ApplyScope.ALL_COMPOSITIONS).forEach { s ->
                   FilterChip(
                     selected = scope == s,
                     onClick = { scope = s },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(s.label) },
+                    label = { Text(s.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
@@ -278,7 +283,7 @@ fun AnimationScreen(
                     onClick = { entry = type },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(type.label) },
+                    label = { Text(type.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
@@ -305,7 +310,7 @@ fun AnimationScreen(
                     onClick = { exit = type },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(type.label) },
+                    label = { Text(type.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
@@ -329,7 +334,7 @@ fun AnimationScreen(
                     onClick = { easing = curve },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(curve.label) },
+                    label = { Text(curve.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }

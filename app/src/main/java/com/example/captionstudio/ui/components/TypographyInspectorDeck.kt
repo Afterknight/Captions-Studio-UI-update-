@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,6 +73,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -162,21 +164,22 @@ fun TypographyInspectorDeck(
       )
     }
 
-    // Clear 5-tab Icon + Label Navigation Bar for effortless customization discovery
+    // Clear 5-tab Icon + Label Navigation Bar for effortless customization discovery (scroll-safe on narrow widths)
     Row(
       modifier =
         Modifier.fillMaxWidth()
           .clip(RoundedCornerShape(16.dp))
           .background(StudioObsidian)
           .border(1.dp, StudioHairline, RoundedCornerShape(16.dp))
+          .horizontalScroll(rememberScrollState())
           .padding(4.dp),
-      horizontalArrangement = Arrangement.spacedBy(3.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       tabs.forEachIndexed { idx, spec ->
         val isSelected = selectedSection == idx
         Box(
           modifier =
-            Modifier.weight(1f)
+            Modifier.widthIn(min = 60.dp)
               .minimumInteractiveComponentSize()
               .clip(RoundedCornerShape(12.dp))
               .background(if (isSelected) StudioElevated else Color.Transparent)
@@ -190,7 +193,7 @@ fun TypographyInspectorDeck(
                 selected = isSelected
                 contentDescription = "${spec.label} customization tab" + if (isSelected) ", selected" else ""
               }
-              .padding(vertical = 7.dp, horizontal = 2.dp)
+              .padding(vertical = 7.dp, horizontal = 8.dp)
               .testTag("typo_inspector_tab_${spec.tag}"),
           contentAlignment = Alignment.Center,
         ) {
@@ -222,6 +225,8 @@ fun TypographyInspectorDeck(
               fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
               color = if (isSelected) StudioCoralLight else StudioTextSecondary,
               maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
             )
           }
         }
@@ -342,10 +347,10 @@ private fun TypographyTextTab(
       }
     }
 
-    // Format & Alignment Quick Icon Row
+    // Format & Alignment Quick Icon Row (scroll-safe on narrow widths)
     Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -424,7 +429,7 @@ private fun TypographyTextTab(
                 borderColor = StudioHairline,
                 selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
               ),
-            label = { Text(lbl, style = MaterialTheme.typography.labelSmall) },
+            label = { Text(lbl, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
             modifier = Modifier.testTag("weight_chip_$w"),
           )
         }
@@ -761,7 +766,7 @@ private fun TypographyLayoutTab(
                 borderColor = StudioHairline,
                 selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
               ),
-            label = { Text(region.label, style = MaterialTheme.typography.labelSmall) },
+            label = { Text(region.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
           )
         }
       }
@@ -834,7 +839,7 @@ private fun TypographyLayoutTab(
     ) {
       Text("Layer Depth Order", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
       Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         DepthLayer.entries.forEach { layer ->
@@ -851,8 +856,7 @@ private fun TypographyLayoutTab(
                 borderColor = StudioHairline,
                 selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
               ),
-            label = { Text(layer.label, style = MaterialTheme.typography.labelSmall) },
-            modifier = Modifier.weight(1f),
+            label = { Text(layer.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
           )
         }
       }

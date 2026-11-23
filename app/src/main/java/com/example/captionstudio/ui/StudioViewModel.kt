@@ -758,6 +758,31 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           }
         _transcribedSegments.value = segments
 
+        val targetSampleTimes =
+          if (segments.isNotEmpty()) {
+            segments.map { (it.startMs + it.endMs) / 2L }
+          } else {
+            result.wordTimings.chunked(4).map { chunk ->
+              (chunk.first().startMs + chunk.last().endMs) / 2L
+            }
+          }
+
+        val enrichedAnalysis =
+          if (latest.videoUriString.isNotBlank() &&
+              (latest.analysisReport.shotAnalyses.isEmpty() || targetSampleTimes.isNotEmpty())
+          ) {
+            runCatching {
+              VideoAnalysisService.analyzeLocally(
+                context = getApplication(),
+                videoUri = Uri.parse(latest.videoUriString),
+                metadata = latest.metadata,
+                targetTimestampsMs = targetSampleTimes,
+              )
+            }.getOrDefault(latest.analysisReport)
+          } else {
+            latest.analysisReport
+          }
+
         val preset = PresetCatalog.findById(latest.presetId)
         val comps =
           if (autoCompose) {
@@ -766,7 +791,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 LocalCompositionEngine.generateCompositionsFromPhrases(
                   phrases = segments.map { it.words },
                   preset = preset,
-                  analysisReport = latest.analysisReport,
+                  analysisReport = enrichedAnalysis,
                   fontOverrides = latest.fontOverrides,
                 )
               } else {
@@ -776,7 +801,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                   totalDurationMs =
                     max(latest.metadata.durationMs, result.wordTimings.lastOrNull()?.endMs ?: 4000L),
                   preset = preset,
-                  analysisReport = latest.analysisReport,
+                  analysisReport = enrichedAnalysis,
                   fontOverrides = latest.fontOverrides,
                 )
               }
@@ -794,6 +819,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           latest.copy(
             transcriptText = result.transcript,
             wordTimings = result.wordTimings,
+            analysisReport = enrichedAnalysis,
             compositions = comps,
           )
         )
@@ -801,7 +827,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _selectedElementId.value = comps.firstOrNull()?.elements?.firstOrNull()?.id
         _playheadMs.value = comps.firstOrNull()?.startMs ?: 0L
         _statusBanner.value =
-          "${result.engineLabel}: ${segments.size} text segments & ${comps.size} kinetic captions ready."
+          "${result.engineLabel}: ${segments.size} segments & ${comps.size} frame-aware captions ready."
       }
       is AutoTranscribeResult.NoSpeechDetected -> {
         _statusBanner.value = result.message
@@ -833,24 +859,51 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     viewModelScope.launch {
       _isBusy.value = true
       try {
+        val targetTimes =
+          if (project.wordTimings.isNotEmpty()) {
+            project.wordTimings.chunked(4).map { chunk ->
+              (chunk.first().startMs + chunk.last().endMs) / 2L
+            }
+          } else {
+            emptyList()
+          }
+        val effectiveAnalysis =
+          if (project.videoUriString.isNotBlank() && project.analysisReport.shotAnalyses.isEmpty()) {
+            runCatching {
+              VideoAnalysisService.analyzeLocally(
+                context = getApplication(),
+                videoUri = Uri.parse(project.videoUriString),
+                metadata = project.metadata,
+                targetTimestampsMs = targetTimes,
+              )
+            }.getOrDefault(project.analysisReport)
+          } else {
+            project.analysisReport
+          }
+
         val localComps =
           LocalCompositionEngine.generateCompositions(
             transcript = project.transcriptText,
             wordTimings = project.wordTimings,
             totalDurationMs = project.metadata.durationMs,
             preset = preset,
-            analysisReport = project.analysisReport,
+            analysisReport = effectiveAnalysis,
             fontOverrides = project.fontOverrides,
           )
 
         var finalComps = localComps
-        var bannerMsg = "Generated ${localComps.size} kinetic compositions offline."
+        var bannerMsg =
+          if (effectiveAnalysis.shotAnalyses.isNotEmpty()) {
+            "Generated ${localComps.size} frame-aware captions across ${effectiveAnalysis.shotAnalyses.size} shot(s) offline."
+          } else {
+            "Generated ${localComps.size} kinetic captions offline."
+          }
 
         if (useGemini) {
           val apiKey = keyStore.getApiKey()
           val settings = geminiSettings.value
           if (apiKey.isNullOrBlank()) {
-            bannerMsg = "API key unavailable; fell back to local kinetic composition engine."
+            bannerMsg = "No Gemini key configured — applied smart offline placement instead."
           } else {
             val frames =
               if (settings.allowFrameSharing &&
@@ -874,7 +927,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 transcript = project.transcriptText,
                 wordTimings = project.wordTimings,
                 preset = preset,
-                analysisReport = project.analysisReport,
+                analysisReport = effectiveAnalysis,
                 tokenBudget = settings.tokenBudget,
                 timestampedFrames = frames,
               )
@@ -882,15 +935,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             when (result) {
               is GeminiApiResult.Success -> {
                 finalComps = result.data
+                val actualModel =
+                  (result.usedModelName ?: settings.selectedModelName).removePrefix("models/")
+                val requestedModel = settings.selectedModelName.removePrefix("models/")
                 bannerMsg =
-                  "Generated ${result.data.size} vision-directed captions via ${settings.selectedModelName.removePrefix("models/")}."
+                  if (actualModel != requestedModel) {
+                    "Generated ${result.data.size} captions via backup model $actualModel."
+                  } else {
+                    "Generated ${result.data.size} vision-directed captions via $actualModel."
+                  }
               }
               is GeminiApiResult.Error -> {
                 bannerMsg =
-                  if (settings.usageMode == GeminiUsageMode.HYBRID) {
-                    "Gemini skipped (${result.message}). Using local hybrid compositions."
+                  if (result.isTransientBusy || result.httpCode == 503 || result.httpCode == 429) {
+                    "Gemini is busy right now — applied smart offline placement instead."
                   } else {
-                    "${result.message} Using local fallback compositions."
+                    "Gemini unavailable — applied smart offline placement instead."
                   }
               }
             }
@@ -905,7 +965,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             videoHeightPx = project.metadata.effectiveHeight,
           )
 
-        commitMutation(project.copy(compositions = validated))
+        commitMutation(
+          project.copy(
+            analysisReport = effectiveAnalysis,
+            compositions = validated,
+          )
+        )
         _selectedCompositionId.value = validated.firstOrNull()?.id
         _selectedElementId.value = validated.firstOrNull()?.elements?.firstOrNull()?.id
         _playheadMs.value = validated.firstOrNull()?.startMs ?: 0L
@@ -953,16 +1018,23 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun toggleCompositionDepthMask(compId: String) {
     val project = _activeProject.value ?: return
+    if (project.compositions.isEmpty()) {
+      _statusBanner.value = "Transcribe or add captions first to enable behind-subject depth."
+      return
+    }
+    var enabledResult = false
     val updated =
       project.compositions.map { comp ->
         if (comp.id != compId) {
           comp
         } else {
           val nextEnable = !comp.hasBehindSubjectElements()
+          enabledResult = nextEnable
           val nextLayer = if (nextEnable) DepthLayer.BEHIND_SUBJECT else DepthLayer.IN_FRONT
+          val hasDominant = comp.elements.any { it.hierarchyLevel == HierarchyLevel.DOMINANT }
           val updatedEls =
-            comp.elements.map { el ->
-              if (el.hierarchyLevel == HierarchyLevel.DOMINANT) {
+            comp.elements.mapIndexed { idx, el ->
+              if (el.hierarchyLevel == HierarchyLevel.DOMINANT || (!hasDominant && idx == 0)) {
                 el.copy(depthLayer = nextLayer)
               } else {
                 el
@@ -976,6 +1048,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
       }
     commitMutation(project.copy(compositions = updated))
+    _statusBanner.value =
+      if (enabledResult) "Behind-subject depth ON for active caption."
+      else "Behind-subject depth OFF."
   }
 
   fun splitComposition(compId: String) {
@@ -1733,6 +1808,40 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     commitMutation(project.copy(compositions = updated), recordHistory = false)
   }
 
+  private fun resolveEffectiveWordTimings(project: CaptionProject): List<WordTiming> {
+    if (project.wordTimings.isNotEmpty()) return project.wordTimings
+    val fromComps =
+      project.compositions.flatMap { comp ->
+        if (comp.wordMappings.isNotEmpty()) {
+          comp.wordMappings
+        } else {
+          val tokens =
+            comp.originalText.ifBlank { comp.elements.joinToString(" ") { it.text } }
+              .trim()
+              .split(Regex("\\s+"))
+              .filter { it.isNotBlank() }
+          if (tokens.isEmpty()) {
+            emptyList()
+          } else {
+            val dur = max(200L, comp.endMs - comp.startMs)
+            val slice = dur / tokens.size
+            tokens.mapIndexed { idx, token ->
+              val ws = comp.startMs + slice * idx
+              val we = if (idx == tokens.lastIndex) comp.endMs else max(ws + 80L, ws + slice)
+              WordTiming(
+                word = token,
+                startMs = ws,
+                endMs = we,
+                isEstimated = true,
+                emphasisScore = LocalCompositionEngine.scoreWordSalience(token, idx, tokens.size),
+              )
+            }
+          }
+        }
+      }
+    return fromComps
+  }
+
   fun quickEditWord(
     wordIndex: Int,
     newText: String,
@@ -1740,11 +1849,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     behindSubject: Boolean,
   ) {
     val project = _activeProject.value ?: return
-    if (wordIndex !in project.wordTimings.indices) return
+    val baseTimings = resolveEffectiveWordTimings(project)
+    if (wordIndex !in baseTimings.indices) return
     val clean = newText.trim()
     if (clean.isEmpty()) return
 
-    val oldWord = project.wordTimings[wordIndex]
+    val oldWord = baseTimings[wordIndex]
     val newEmphasisScore =
       when (emphasis) {
         HierarchyLevel.DOMINANT -> 0.95f
@@ -1752,7 +1862,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         else -> 0.15f
       }
     val updatedTimings =
-      project.wordTimings.toMutableList().apply {
+      baseTimings.toMutableList().apply {
         this[wordIndex] = oldWord.copy(word = clean, emphasisScore = newEmphasisScore)
       }
     val updatedTranscript = updatedTimings.joinToString(" ") { it.word }
@@ -1811,7 +1921,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               } else el
             }
           comp.copy(
-            originalText = replacedWordMappings.joinToString(" ") { it.word }.ifBlank { comp.originalText },
+            originalText = replacedWordMappings.joinToString(" ") { it.word }.ifBlank {
+              replacedElements.joinToString(" ") { it.text }
+            },
             wordMappings = replacedWordMappings,
             elements = replacedElements,
             depthLayer = if (behindSubject) DepthLayer.BEHIND_SUBJECT else comp.depthLayer,
@@ -1833,9 +1945,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun deleteWordAt(wordIndex: Int) {
     val project = _activeProject.value ?: return
-    if (wordIndex !in project.wordTimings.indices) return
-    val removed = project.wordTimings[wordIndex]
-    val updatedTimings = project.wordTimings.toMutableList().apply { removeAt(wordIndex) }
+    val baseTimings = resolveEffectiveWordTimings(project)
+    if (wordIndex !in baseTimings.indices) return
+    val removed = baseTimings[wordIndex]
+    val updatedTimings = baseTimings.toMutableList().apply { removeAt(wordIndex) }
     val updatedTranscript = updatedTimings.joinToString(" ") { it.word }
     val preset = PresetCatalog.findById(project.presetId)
     val regenerated =

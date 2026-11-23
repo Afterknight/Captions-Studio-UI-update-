@@ -36,10 +36,17 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 
+import kotlin.random.Random
+import kotlinx.coroutines.delay
+
 sealed interface GeminiApiResult<out T> {
-  data class Success<T>(val data: T) : GeminiApiResult<T>
-  data class Error(val message: String, val isPaidOrQuotaIssue: Boolean = false) :
-    GeminiApiResult<Nothing>
+  data class Success<T>(val data: T, val usedModelName: String? = null) : GeminiApiResult<T>
+  data class Error(
+    val message: String,
+    val isPaidOrQuotaIssue: Boolean = false,
+    val isTransientBusy: Boolean = false,
+    val httpCode: Int? = null,
+  ) : GeminiApiResult<Nothing>
 }
 
 data class GeminiAudioTranscript(
@@ -104,6 +111,95 @@ object GeminiApiClient {
     }
   }
 
+  private val retryableHttpCodes = setOf(429, 500, 502, 503, 504)
+  private val defaultBackupModels =
+    listOf(
+      "models/gemini-2.5-flash-lite",
+      "models/gemini-2.0-flash",
+      "models/gemini-2.0-flash-lite",
+      "models/gemini-1.5-flash",
+    )
+
+  /**
+   * Builds an ordered deduplicated cascade starting with the user's selected Gemini model
+   * followed by fast, reliable backup Flash models in case the primary model returns 503/429/404.
+   */
+  internal fun buildFallbackModelCascade(selectedModelName: String): List<String> {
+    val normalizedPrimary =
+      if (selectedModelName.startsWith("models/")) selectedModelName else "models/$selectedModelName"
+    return (listOf(normalizedPrimary) + defaultBackupModels).distinct()
+  }
+
+  /**
+   * Executes a `generateContent` request with:
+   * 1. Automatic exponential backoff + jitter retry (up to 3 attempts) on HTTP 503 / 429 / 5xx
+   *    and transient network timeouts.
+   * 2. Automatic fallback cascade to backup Flash models when the primary model stays busy/unavailable.
+   */
+  private suspend fun executeGenerateContentWithResilience(
+    apiKey: String,
+    selectedModelName: String,
+    payloadJson: String,
+    allowModelFallback: Boolean = true,
+  ): GeminiApiResult<Pair<String, String>> {
+    val modelsToTry =
+      if (allowModelFallback) buildFallbackModelCascade(selectedModelName)
+      else listOf(
+        if (selectedModelName.startsWith("models/")) selectedModelName else "models/$selectedModelName"
+      )
+
+    var lastError: GeminiApiResult.Error =
+      GeminiApiResult.Error("Gemini service is temporarily unavailable.", isTransientBusy = true)
+
+    for ((modelIdx, modelId) in modelsToTry.withIndex()) {
+      // Primary model gets up to 3 attempts; backup models get up to 2 attempts to stay snappy
+      val maxAttempts = if (modelIdx == 0) 3 else 2
+      for (attempt in 1..maxAttempts) {
+        val request =
+          Request.Builder()
+            .url("$BASE_URL/$modelId:generateContent")
+            .addHeader("x-goog-api-key", apiKey)
+            .post(payloadJson.toRequestBody(jsonMediaType))
+            .build()
+
+        try {
+          executeWithNetworkFallback(request).use { response ->
+            val body = response.body?.string().orEmpty()
+            if (response.isSuccessful) {
+              return GeminiApiResult.Success(body to modelId, usedModelName = modelId)
+            }
+            val mapped = mapHttpError(response.code, body)
+            lastError = mapped
+
+            // Auth/key errors should fail immediately without wasting retries or backup models
+            if (response.code in setOf(400, 401, 403)) {
+              return mapped
+            }
+            // Model missing/deprecated -> jump immediately to next backup model
+            if (response.code == 404) {
+              break
+            }
+            if (response.code in retryableHttpCodes && attempt < maxAttempts) {
+              val baseDelay = 550L * (1L shl (attempt - 1)) // 550ms, 1100ms
+              val jitter = Random.nextLong(80L, 280L)
+              delay((baseDelay + jitter).coerceAtMost(2800L))
+            } else {
+              break
+            }
+          }
+        } catch (e: IOException) {
+          lastError = formatNetworkError(e)
+          if (attempt < maxAttempts) {
+            val baseDelay = 500L * attempt
+            val jitter = Random.nextLong(60L, 220L)
+            delay(baseDelay + jitter)
+          }
+        }
+      }
+    }
+    return lastError
+  }
+
   private fun formatNetworkError(e: IOException): GeminiApiResult.Error {
     val detail =
       when (e) {
@@ -114,7 +210,7 @@ object GeminiApiClient {
         else ->
           "Network error reaching Google AI API (${e.javaClass.simpleName}): ${e.localizedMessage ?: "Connection failed"}"
       }
-    return GeminiApiResult.Error(detail)
+    return GeminiApiResult.Error(detail, isTransientBusy = true)
   }
 
   suspend fun fetchAvailableModels(apiKey: String): GeminiApiResult<List<GeminiModelInfo>> =
@@ -214,25 +310,21 @@ object GeminiApiClient {
           put("generationConfig", JSONObject().put("maxOutputTokens", 16).put("temperature", 0.0))
         }
 
-      val request =
-        Request.Builder()
-          .url("$BASE_URL/$normalizedModel:generateContent")
-          .addHeader("x-goog-api-key", trimmed)
-          .post(payload.toString().toRequestBody(jsonMediaType))
-          .build()
-
-      try {
-        executeWithNetworkFallback(request).use { response ->
-          val body = response.body?.string().orEmpty()
-          if (!response.isSuccessful) {
-            return@withContext mapHttpError(response.code, body)
-          }
-          GeminiApiResult.Success("Connected to ${normalizedModel.removePrefix("models/")}")
-        }
-      } catch (e: IOException) {
-        formatNetworkError(e)
-      } catch (e: Exception) {
-        GeminiApiResult.Error("Test failed: ${e.localizedMessage}")
+      return@withContext when (
+        val res =
+          executeGenerateContentWithResilience(
+            apiKey = trimmed,
+            selectedModelName = normalizedModel,
+            payloadJson = payload.toString(),
+            allowModelFallback = false,
+          )
+      ) {
+        is GeminiApiResult.Success ->
+          GeminiApiResult.Success(
+            "Connected to ${res.data.second.removePrefix("models/")}",
+            usedModelName = res.data.second,
+          )
+        is GeminiApiResult.Error -> res
       }
     }
 
@@ -290,63 +382,62 @@ object GeminiApiClient {
           )
         }
 
-      val request =
-        Request.Builder()
-          .url("$BASE_URL/$normalizedModel:generateContent")
-          .addHeader("x-goog-api-key", trimmed)
-          .post(payload.toString().toRequestBody(jsonMediaType))
-          .build()
+      when (
+        val res =
+          executeGenerateContentWithResilience(
+            apiKey = trimmed,
+            selectedModelName = normalizedModel,
+            payloadJson = payload.toString(),
+            allowModelFallback = true,
+          )
+      ) {
+        is GeminiApiResult.Error -> return@withContext res
+        is GeminiApiResult.Success -> {
+          val (body, usedModel) = res.data
+          try {
+            val root = JSONObject(body)
+            val textContent =
+              root
+                .optJSONArray("candidates")
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.optJSONObject(0)
+                ?.optString("text", "")
+                .orEmpty()
 
-      try {
-        executeWithNetworkFallback(request).use { response ->
-          val body = response.body?.string().orEmpty()
-          if (!response.isSuccessful) {
-            return@withContext mapHttpError(response.code, body)
-          }
-          val root = JSONObject(body)
-          val textContent =
-            root
-              .optJSONArray("candidates")
-              ?.optJSONObject(0)
-              ?.optJSONObject("content")
-              ?.optJSONArray("parts")
-              ?.optJSONObject(0)
-              ?.optString("text", "")
-              .orEmpty()
+            if (textContent.isBlank()) {
+              return@withContext GeminiApiResult.Error("Gemini returned an empty transcription.")
+            }
 
-          if (textContent.isBlank()) {
-            return@withContext GeminiApiResult.Error("Gemini returned an empty transcription.")
-          }
-
-          val cleaned =
-            textContent.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-          val parsedObj = JSONObject(cleaned)
-          val transcript = parsedObj.optString("transcript", "").trim()
-          val wordsArr = parsedObj.optJSONArray("words") ?: JSONArray()
-          val words = mutableListOf<WordTiming>()
-          for (i in 0 until wordsArr.length()) {
-            val wObj = wordsArr.optJSONObject(i) ?: continue
-            val wText = wObj.optString("word", "").trim()
-            if (wText.isEmpty()) continue
-            val s = (wObj.optLong("startMs", 0L) + offsetMs).coerceAtLeast(offsetMs)
-            val e = (wObj.optLong("endMs", s + 180L) + offsetMs).coerceAtLeast(s + 60L)
-            words.add(
-              WordTiming(
-                word = wText,
-                startMs = s,
-                endMs = e,
-                isEstimated = false,
+            val cleaned =
+              textContent.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val parsedObj = JSONObject(cleaned)
+            val transcript = parsedObj.optString("transcript", "").trim()
+            val wordsArr = parsedObj.optJSONArray("words") ?: JSONArray()
+            val words = mutableListOf<WordTiming>()
+            for (i in 0 until wordsArr.length()) {
+              val wObj = wordsArr.optJSONObject(i) ?: continue
+              val wText = wObj.optString("word", "").trim()
+              if (wText.isEmpty()) continue
+              val s = (wObj.optLong("startMs", 0L) + offsetMs).coerceAtLeast(offsetMs)
+              val e = (wObj.optLong("endMs", s + 180L) + offsetMs).coerceAtLeast(s + 60L)
+              words.add(
+                WordTiming(
+                  word = wText,
+                  startMs = s,
+                  endMs = e,
+                  isEstimated = false,
+                )
               )
-            )
+            }
+            val finalTranscript =
+              if (transcript.isNotBlank()) transcript else words.joinToString(" ") { it.word }
+            GeminiApiResult.Success(GeminiAudioTranscript(finalTranscript, words), usedModelName = usedModel)
+          } catch (e: Exception) {
+            GeminiApiResult.Error("Audio transcription parse failed: ${e.localizedMessage}")
           }
-          val finalTranscript =
-            if (transcript.isNotBlank()) transcript else words.joinToString(" ") { it.word }
-          GeminiApiResult.Success(GeminiAudioTranscript(finalTranscript, words))
         }
-      } catch (e: IOException) {
-        formatNetworkError(e)
-      } catch (e: Exception) {
-        GeminiApiResult.Error("Audio transcription parse failed: ${e.localizedMessage}")
       }
     }
 
@@ -422,44 +513,43 @@ object GeminiApiClient {
           )
         }
 
-      val request =
-        Request.Builder()
-          .url("$BASE_URL/$normalizedModel:generateContent")
-          .addHeader("x-goog-api-key", trimmed)
-          .post(payload.toString().toRequestBody(jsonMediaType))
-          .build()
+      when (
+        val res =
+          executeGenerateContentWithResilience(
+            apiKey = trimmed,
+            selectedModelName = normalizedModel,
+            payloadJson = payload.toString(),
+            allowModelFallback = true,
+          )
+      ) {
+        is GeminiApiResult.Error -> return@withContext res
+        is GeminiApiResult.Success -> {
+          val (body, usedModel) = res.data
+          try {
+            val root = JSONObject(body)
+            val textContent =
+              root
+                .optJSONArray("candidates")
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.optJSONObject(0)
+                ?.optString("text", "")
+                .orEmpty()
 
-      try {
-        executeWithNetworkFallback(request).use { response ->
-          val body = response.body?.string().orEmpty()
-          if (!response.isSuccessful) {
-            return@withContext mapHttpError(response.code, body)
-          }
-          val root = JSONObject(body)
-          val textContent =
-            root
-              .optJSONArray("candidates")
-              ?.optJSONObject(0)
-              ?.optJSONObject("content")
-              ?.optJSONArray("parts")
-              ?.optJSONObject(0)
-              ?.optString("text", "")
-              .orEmpty()
-
-          if (textContent.isBlank()) {
-            return@withContext GeminiApiResult.Error("Model returned an empty response.")
-          }
-          val compositions = parseCompositionsJson(textContent, preset, wordTimings)
-          if (compositions.isEmpty()) {
-            GeminiApiResult.Error("Could not parse structured compositions from model output.")
-          } else {
-            GeminiApiResult.Success(compositions)
+            if (textContent.isBlank()) {
+              return@withContext GeminiApiResult.Error("Model returned an empty response.")
+            }
+            val compositions = parseCompositionsJson(textContent, preset, wordTimings)
+            if (compositions.isEmpty()) {
+              GeminiApiResult.Error("Could not parse structured compositions from model output.")
+            } else {
+              GeminiApiResult.Success(compositions, usedModelName = usedModel)
+            }
+          } catch (e: Exception) {
+            GeminiApiResult.Error("AI composition failed: ${e.localizedMessage}")
           }
         }
-      } catch (e: IOException) {
-        formatNetworkError(e)
-      } catch (e: Exception) {
-        GeminiApiResult.Error("AI composition failed: ${e.localizedMessage}")
       }
     }
 
@@ -623,7 +713,7 @@ object GeminiApiClient {
     return list
   }
 
-  private fun mapHttpError(code: Int, body: String): GeminiApiResult.Error {
+  internal fun mapHttpError(code: Int, body: String): GeminiApiResult.Error {
     val apiMsg =
       runCatching { JSONObject(body).optJSONObject("error")?.optString("message") }.getOrNull()
         ?: body.take(180)
@@ -632,17 +722,29 @@ object GeminiApiClient {
         GeminiApiResult.Error(
           "API key rejected or lacks permission ($code): $apiMsg",
           isPaidOrQuotaIssue = apiMsg.contains("billing", ignoreCase = true),
+          isTransientBusy = false,
+          httpCode = code,
         )
       404 ->
         GeminiApiResult.Error(
-          "Selected model is unavailable or deprecated (404). Refresh the model list and choose another."
+          "Selected model is unavailable or deprecated (404). Refresh the model list and choose another.",
+          isTransientBusy = false,
+          httpCode = code,
         )
       429 ->
         GeminiApiResult.Error(
-          "Rate limit or quota exhausted (429). Free-tier quotas depend on Google's current API policies. $apiMsg",
+          "Gemini rate limit or quota reached (429). $apiMsg",
           isPaidOrQuotaIssue = true,
+          isTransientBusy = true,
+          httpCode = code,
         )
-      else -> GeminiApiResult.Error("Gemini API error ($code): $apiMsg")
+      500, 502, 503, 504 ->
+        GeminiApiResult.Error(
+          "Gemini servers are temporarily busy ($code). $apiMsg",
+          isTransientBusy = true,
+          httpCode = code,
+        )
+      else -> GeminiApiResult.Error("Gemini API error ($code): $apiMsg", httpCode = code)
     }
   }
 }

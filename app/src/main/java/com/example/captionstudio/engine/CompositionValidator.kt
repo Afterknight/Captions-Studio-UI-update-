@@ -131,9 +131,10 @@ object CompositionValidator {
       var clampedSp = el.fontSizeSp.coerceIn(minSize, maxSize)
       val safeColor = normalizeHex(el.colorHex)
 
-      // Measure actual rendered width if Context is available
+      // Measure actual rendered width if Context is available, otherwise use conservative typographic metrics
+      val displayText = if (el.uppercase) el.text.uppercase() else el.text
+      val tokens = displayText.split(" ").filter { it.isNotEmpty() }
       if (context != null && referenceScale > 0f) {
-        val displayText = if (el.uppercase) el.text.uppercase() else el.text
         val paint =
           TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = FontRegistry.getTypeface(context, validFont, el.fontWeight, el.isItalic)
@@ -141,9 +142,19 @@ object CompositionValidator {
             letterSpacing = el.letterSpacingEm
             textSize = clampedSp * referenceScale
           }
-        val measured = paint.measureText(displayText)
-        if (measured > maxLineWidthPx && !displayText.contains(" ")) {
-          val shrinkRatio = (maxLineWidthPx / measured).coerceIn(0.45f, 1f)
+        val widestToken =
+          tokens.maxOfOrNull { paint.measureText(it) } ?: paint.measureText(displayText)
+        if (widestToken > maxLineWidthPx) {
+          val shrinkRatio = (maxLineWidthPx / widestToken).coerceIn(0.45f, 1f)
+          clampedSp = (clampedSp * shrinkRatio).coerceAtLeast(minSize)
+        }
+      } else if (referenceScale > 0f && tokens.isNotEmpty()) {
+        val longestChars = tokens.maxOf { it.length }
+        val glyphWidthRatio =
+          (if (el.uppercase) 0.62f else 0.56f) + el.letterSpacingEm.coerceAtLeast(0f)
+        val estWidestPx = longestChars * (clampedSp * referenceScale) * glyphWidthRatio
+        if (estWidestPx > maxLineWidthPx) {
+          val shrinkRatio = (maxLineWidthPx / estWidestPx).coerceIn(0.45f, 1f)
           clampedSp = (clampedSp * shrinkRatio).coerceAtLeast(minSize)
         }
       }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,6 +60,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeRegion
@@ -164,21 +166,35 @@ fun PresetsScreen(
                 Button(
                   onClick = onOpenStyleCloner,
                   shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                   colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-                  modifier = Modifier.weight(1f).height(44.dp).testTag("presets_open_cloner_button"),
+                  modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("presets_open_cloner_button"),
                 ) {
                   Icon(Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
                   Spacer(Modifier.width(6.dp))
-                  Text("Clone Video", fontWeight = FontWeight.SemiBold)
+                  Text(
+                    "Clone Video",
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                  )
                 }
                 OutlinedButton(
                   onClick = { showImportDialog = true },
                   shape = CircleShape,
-                  modifier = Modifier.weight(1f).height(44.dp).testTag("presets_import_link_button"),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                  modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("presets_import_link_button"),
                 ) {
                   Icon(Icons.Filled.Link, contentDescription = null, tint = StudioCoralLight, modifier = Modifier.size(16.dp))
                   Spacer(Modifier.width(6.dp))
-                  Text("Import Link", color = StudioTextPrimary)
+                  Text(
+                    "Import Link",
+                    color = StudioTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                  )
                 }
               }
             }
@@ -378,20 +394,22 @@ private fun PresetPreviewCard(
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Row(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
             text = displayName,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = if (isSelected) StudioCoralLight else StudioTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
           )
           if (isSelected) {
             Surface(color = StudioCoralContainer, shape = CircleShape) {
               Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 Icon(
@@ -400,8 +418,14 @@ private fun PresetPreviewCard(
                   tint = StudioCoralLight,
                   modifier = Modifier.size(13.dp),
                 )
-                Spacer(Modifier.width(4.dp))
-                Text("Active", style = MaterialTheme.typography.labelSmall, color = StudioCoralLight)
+                Spacer(Modifier.width(3.dp))
+                Text(
+                  "Active",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = StudioCoralLight,
+                  maxLines = 1,
+                  softWrap = false,
+                )
               }
             }
           }
@@ -411,16 +435,21 @@ private fun PresetPreviewCard(
           text = preset.tagline,
           style = MaterialTheme.typography.labelMedium,
           color = StudioCoralLight,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
         )
         Text(
           text = preset.description,
           style = MaterialTheme.typography.bodySmall,
           color = StudioTextSecondary,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
         )
 
         Spacer(Modifier.height(2.dp))
 
         Row(
+          modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -444,45 +473,48 @@ private fun PresetPreviewCard(
           Spacer(Modifier.weight(1f))
           IconButton(
             onClick = onShareLink,
-            modifier = Modifier.size(36.dp),
+            modifier = Modifier.size(40.dp),
           ) {
             Icon(
               Icons.Filled.Share,
               contentDescription = "Share style link",
               tint = StudioTextSecondary,
-              modifier = Modifier.size(17.dp),
+              modifier = Modifier.size(18.dp),
             )
           }
           if (onDelete != null) {
             IconButton(
               onClick = onDelete,
-              modifier = Modifier.size(36.dp),
+              modifier = Modifier.size(40.dp),
             ) {
               Icon(
                 Icons.Filled.DeleteOutline,
                 contentDescription = "Delete custom style",
                 tint = StudioError,
-                modifier = Modifier.size(17.dp),
+                modifier = Modifier.size(18.dp),
               )
             }
           }
-          Button(
-            onClick = onApply,
-            shape = CircleShape,
-            colors =
-              ButtonDefaults.buttonColors(
-                containerColor = if (isSelected) StudioElevated else StudioCoral,
-                contentColor = Color.White,
-              ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            modifier = Modifier.height(36.dp).testTag("apply_preset_${preset.id}"),
-          ) {
-            Text(
-              if (isSelected) "Re-Apply" else "Apply",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-            )
-          }
+        }
+
+        Button(
+          onClick = onApply,
+          shape = CircleShape,
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = if (isSelected) StudioElevated else StudioCoral,
+              contentColor = Color.White,
+            ),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+          modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("apply_preset_${preset.id}"),
+        ) {
+          Text(
+            if (isSelected) "Re-Apply Style" else "Apply Style",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false,
+          )
         }
       }
     }

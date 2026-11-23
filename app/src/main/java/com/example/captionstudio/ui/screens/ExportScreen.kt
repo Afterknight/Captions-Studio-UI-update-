@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,12 +18,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
@@ -58,6 +61,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.R
@@ -156,7 +160,10 @@ fun ExportScreen(
           StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
               Text("Quick Presets", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 OutlinedButton(
                   onClick = {
                     onUpdatePreferences(
@@ -168,8 +175,8 @@ fun ExportScreen(
                     )
                   },
                   shape = CircleShape,
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                  modifier = Modifier.weight(1f),
+                  contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                  modifier = Modifier.heightIn(min = 48.dp),
                 ) {
                   Text("Reels 9:16", color = StudioTextPrimary, maxLines = 1, softWrap = false)
                 }
@@ -184,8 +191,8 @@ fun ExportScreen(
                     )
                   },
                   shape = CircleShape,
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                  modifier = Modifier.weight(1f),
+                  contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                  modifier = Modifier.heightIn(min = 48.dp),
                 ) {
                   Text("YouTube 60p", color = StudioTextPrimary, maxLines = 1, softWrap = false)
                 }
@@ -200,8 +207,8 @@ fun ExportScreen(
                     )
                   },
                   shape = CircleShape,
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                  modifier = Modifier.weight(1f),
+                  contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                  modifier = Modifier.heightIn(min = 48.dp),
                 ) {
                   Text("Square 1:1", color = StudioTextPrimary, maxLines = 1, softWrap = false)
                 }
@@ -215,53 +222,65 @@ fun ExportScreen(
           StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
               Text("Aspect Ratio", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 AspectRatioOption.entries.forEach { ar ->
                   FilterChip(
                     selected = prefs.aspectRatio == ar,
                     onClick = { onUpdatePreferences(prefs.copy(aspectRatio = ar)) },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(ar.label) },
+                    label = { Text(ar.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
 
               Text("Resolution", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 ExportResolution.entries.forEach { res ->
                   FilterChip(
                     selected = prefs.resolution == res,
                     onClick = { onUpdatePreferences(prefs.copy(resolution = res)) },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(res.label) },
+                    label = { Text(res.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
 
               Text("Frame Rate", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 ExportFrameRate.entries.forEach { fr ->
                   FilterChip(
                     selected = prefs.frameRate == fr,
                     onClick = { onUpdatePreferences(prefs.copy(frameRate = fr)) },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text(fr.label) },
+                    label = { Text(fr.label, maxLines = 1, softWrap = false) },
                   )
                 }
               }
 
               Text("Quality", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
                 ExportQualityMode.entries.forEach { q ->
                   FilterChip(
                     selected = prefs.qualityMode == q,
                     onClick = { onUpdatePreferences(prefs.copy(qualityMode = q)) },
                     shape = CircleShape,
                     colors = chipColors,
-                    label = { Text("${q.label} (${q.bitrateMbps} Mbps)") },
+                    label = { Text("${q.label} (${q.bitrateMbps} Mbps)", maxLines = 1, softWrap = false) },
                   )
                 }
               }
@@ -395,7 +414,7 @@ fun ExportScreen(
                     color = StudioTextSecondary,
                   )
                   Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                   ) {
                     DirectSocialSharePill(
@@ -408,7 +427,7 @@ fun ExportScreen(
                           "Share to Instagram Reels",
                         )
                       },
-                      modifier = Modifier.weight(1f).testTag("direct_share_reels"),
+                      modifier = Modifier.testTag("direct_share_reels"),
                     )
                     DirectSocialSharePill(
                       label = "TikTok",
@@ -420,7 +439,7 @@ fun ExportScreen(
                           "Share to TikTok",
                         )
                       },
-                      modifier = Modifier.weight(1f).testTag("direct_share_tiktok"),
+                      modifier = Modifier.testTag("direct_share_tiktok"),
                     )
                     DirectSocialSharePill(
                       label = "Shorts",
@@ -432,7 +451,7 @@ fun ExportScreen(
                           "Share to YouTube Shorts",
                         )
                       },
-                      modifier = Modifier.weight(1f).testTag("direct_share_shorts"),
+                      modifier = Modifier.testTag("direct_share_shorts"),
                     )
                     DirectSocialSharePill(
                       label = "WhatsApp",
@@ -444,7 +463,7 @@ fun ExportScreen(
                           "Share to WhatsApp",
                         )
                       },
-                      modifier = Modifier.weight(1f).testTag("direct_share_whatsapp"),
+                      modifier = Modifier.testTag("direct_share_whatsapp"),
                     )
                   }
 
@@ -456,7 +475,8 @@ fun ExportScreen(
                         savedLookToast = true
                       },
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(46.dp).testTag("save_look_preset_button"),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                      modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("save_look_preset_button"),
                     ) {
                       Icon(
                         Icons.Filled.BookmarkAdd,
@@ -469,6 +489,8 @@ fun ExportScreen(
                         if (savedLookToast) "Saved!" else "Save Preset",
                         color = StudioTextPrimary,
                         maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                       )
                     }
                     OutlinedButton(
@@ -486,7 +508,8 @@ fun ExportScreen(
                         context.startActivity(Intent.createChooser(send, "Share Style Deep Link"))
                       },
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(46.dp).testTag("export_share_style_link"),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                      modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("export_share_style_link"),
                     ) {
                       Icon(
                         Icons.Filled.Link,
@@ -495,7 +518,13 @@ fun ExportScreen(
                         modifier = Modifier.size(16.dp),
                       )
                       Spacer(Modifier.width(6.dp))
-                      Text("Style Link", color = StudioTextPrimary, maxLines = 1)
+                      Text(
+                        "Style Link",
+                        color = StudioTextPrimary,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                      )
                     }
                   }
 
@@ -505,19 +534,33 @@ fun ExportScreen(
                         shareVideoToPlatform(context, exportState.galleryUri, emptyList(), "Share Captioned Video")
                       },
                       shape = CircleShape,
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                       colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-                      modifier = Modifier.weight(1f).height(48.dp),
+                      modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     ) {
-                      Icon(Icons.Filled.Share, contentDescription = null)
+                      Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                       Spacer(Modifier.width(6.dp))
-                      Text("More Apps", fontWeight = FontWeight.SemiBold)
+                      Text(
+                        "More Apps",
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                      )
                     }
                     OutlinedButton(
                       onClick = { launchExportSafely() },
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(48.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                      modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     ) {
-                      Text("Export Again", color = StudioTextPrimary)
+                      Text(
+                        "Export Again",
+                        color = StudioTextPrimary,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                      )
                     }
                   }
                 }
@@ -557,13 +600,13 @@ private fun DirectSocialSharePill(
   Button(
     onClick = onClick,
     shape = CircleShape,
-    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
     colors =
       ButtonDefaults.buttonColors(
         containerColor = StudioCoralContainer,
         contentColor = StudioCoralLight,
       ),
-    modifier = modifier.height(44.dp),
+    modifier = modifier.heightIn(min = 48.dp),
   ) {
     Text(
       text = label,

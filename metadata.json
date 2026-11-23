@@ -1,5 +1,5 @@
 {
-  "name": "Caption Studio",
+  "name": "Captions Studio v-beta-0",
   "description": "Kinetic typography editor and AI caption composition studio for spoken video.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

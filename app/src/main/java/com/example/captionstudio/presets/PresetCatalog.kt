@@ -276,15 +276,18 @@ object PresetCatalog {
     val supportingFont = fontOverrides.supportingFontId ?: preset.supportingFontId
     val expressiveFont = fontOverrides.expressiveFontId ?: preset.expressiveFontId
 
-    val candidateRegions =
-      (analysisReport.safeRegionsRanked.filter { it in preset.preferredRegions } +
-          preset.preferredRegions)
-        .distinct()
-        .ifEmpty { listOf(SafeRegion.UPPER_CENTER, SafeRegion.LOWER_CENTER) }
+    val fallbackRegion =
+      analysisReport.shotAnalyses.firstOrNull()?.preferredZone
+        ?: analysisReport.safeRegionsRanked.firstOrNull {
+          it == SafeRegion.LOWER_CENTER || it == SafeRegion.UPPER_CENTER || it == SafeRegion.CENTER
+        }
+        ?: preset.preferredRegions.firstOrNull()
+        ?: SafeRegion.LOWER_CENTER
 
-    return compositions.mapIndexed { idx, comp ->
-      val preserveCustomRegion = comp.region == SafeRegion.SEAM_CENTER || comp.region == SafeRegion.CUSTOM
-      val region = if (preserveCustomRegion) comp.region else candidateRegions[idx % candidateRegions.size]
+    return compositions.map { comp ->
+      // Preserve frame-aware shot placement and user custom placements when switching presets
+      val region = if (comp.region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else comp.region
+      val preserveCoords = true
       val baseElements =
         comp.elements.map { el ->
           val roleFont =
@@ -345,10 +348,11 @@ object PresetCatalog {
               else 0f,
           )
         }
+      val effectiveRegion = if (region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else region
       comp.copy(
-        region = region,
-        anchorXFraction = if (preserveCustomRegion) comp.anchorXFraction else region.defaultAnchorX,
-        anchorYFraction = if (preserveCustomRegion) comp.anchorYFraction else region.defaultAnchorY,
+        region = effectiveRegion,
+        anchorXFraction = if (preserveCoords) comp.anchorXFraction else fallbackRegion.defaultAnchorX,
+        anchorYFraction = if (preserveCoords) comp.anchorYFraction else fallbackRegion.defaultAnchorY,
         entryAnimation = preset.defaultEntryAnim,
         exitAnimation = preset.defaultExitAnim,
         easing = preset.defaultEasing,

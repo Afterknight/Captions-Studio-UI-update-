@@ -3,11 +3,14 @@ package com.example.captionstudio.ui.components
 import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.RectF
 import android.net.Uri
 import android.view.LayoutInflater
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -281,47 +284,77 @@ fun KineticPreviewStage(
   val playerViewRef = remember(videoUriString) { mutableStateOf<PlayerView?>(null) }
   val cachedTextureViewRef = remember(videoUriString) { mutableStateOf<TextureView?>(null) }
   var activeSubjectMask by remember(videoUriString) { mutableStateOf<Bitmap?>(null) }
+  var activeMaskVideoRect by remember(videoUriString) { mutableStateOf<RectF?>(null) }
 
   val activeComp =
-    remember(compositions, playheadMs, selectedCompositionId) {
-      compositions.firstOrNull { playheadMs in it.startMs..it.endMs }
+    remember(compositions, localPlayheadMs, selectedCompositionId) {
+      compositions.firstOrNull { localPlayheadMs in it.startMs..it.endMs }
         ?: compositions.firstOrNull { it.id == selectedCompositionId }
     }
   val needsSubjectMask = hasVideo && activeComp?.hasBehindSubjectElements() == true
-  val maskCadenceMs = if (effectivePerformanceMode) 90L else 42L
-  val maskBucket = playheadMs / maskCadenceMs
 
-  // Lazily run high-precision edge-guided on-device segmentation ONLY when behind-subject caption is active
-  LaunchedEffect(videoUriString, needsSubjectMask, maskBucket) {
+  // Tightly frame-locked live-preview subject mask loop (eliminates parent-playhead lag & seek drift)
+  LaunchedEffect(videoUriString, needsSubjectMask, isPlaying, effectivePerformanceMode, playheadMs.takeIf { !isPlaying }) {
     if (!needsSubjectMask) {
       activeSubjectMask = null
       return@LaunchedEffect
     }
-    SubjectMaskProcessor.getCachedMask(videoUriString, playheadMs)?.let { cached ->
-      activeSubjectMask = cached
-      if (maskBucket % 2L != 0L && effectivePerformanceMode) {
-        return@LaunchedEffect
+    var lastProcessedPosMs = Long.MIN_VALUE
+    val targetIntervalMs = if (effectivePerformanceMode) 68L else 36L
+
+    while (isActive) {
+      val livePosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: localPlayheadMs
+      val jumped = lastProcessedPosMs != Long.MIN_VALUE && abs(livePosMs - lastProcessedPosMs) > 240L
+      if (jumped) {
+        // Seek jump or loop wrap: immediately flush temporal filter so stale cutout never lags behind
+        SubjectMaskProcessor.invalidatePreviewTemporalState()
+        activeSubjectMask = null
       }
-    }
-    val texView =
-      cachedTextureViewRef.value
-        ?: playerViewRef.value?.let { pv -> findTextureView(pv).also { cachedTextureViewRef.value = it } }
-    if (texView != null && texView.isAvailable && texView.width > 0 && texView.height > 0) {
-      val sampleW = if (effectivePerformanceMode) 176 else 256
-      val sampleH = ((sampleW / ratio).toInt()).coerceIn(112, 420)
-      val snap = runCatching { texView.getBitmap(sampleW, sampleH) }.getOrNull()
-      if (snap != null) {
-        val computed =
-          SubjectMaskProcessor.generateAndCacheMask(
-            videoKey = videoUriString,
-            positionMs = playheadMs,
-            frameBitmap = snap,
-            highPrecision = !effectivePerformanceMode,
-          )
-        snap.recycle()
-        if (computed != null) {
-          activeSubjectMask = computed
+
+      val texView =
+        cachedTextureViewRef.value
+          ?: playerViewRef.value?.let { pv -> findTextureView(pv).also { cachedTextureViewRef.value = it } }
+      val pv = playerViewRef.value
+
+      if (texView != null && pv != null && texView.isAvailable && texView.width > 0 && texView.height > 0) {
+        activeMaskVideoRect = computeTextureRectInParent(pv, texView)
+        val cached = SubjectMaskProcessor.getCachedMask(videoUriString, livePosMs)
+        val shouldComputeFresh =
+          cached == null || jumped || abs(livePosMs - lastProcessedPosMs) >= targetIntervalMs
+
+        if (cached != null && !jumped) {
+          activeSubjectMask = cached
         }
+
+        if (shouldComputeFresh) {
+          val texRatio = (texView.width.toFloat() / texView.height.toFloat()).coerceIn(0.35f, 3.0f)
+          val sampleW = if (effectivePerformanceMode) 224 else 320
+          val sampleH = (sampleW / texRatio).toInt().coerceIn(128, 480)
+          val capturePosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: livePosMs
+          val snap = runCatching { texView.getBitmap(sampleW, sampleH) }.getOrNull()
+          if (snap != null) {
+            val computed =
+              SubjectMaskProcessor.generateAndCacheMask(
+                videoKey = videoUriString,
+                positionMs = capturePosMs,
+                frameBitmap = snap,
+                highPrecision = !effectivePerformanceMode,
+              )
+            snap.recycle()
+            if (computed != null) {
+              activeSubjectMask = computed
+              lastProcessedPosMs = capturePosMs
+            }
+          }
+        }
+      }
+
+      if (!isPlaying) {
+        // When paused, one clean settled mask pass is enough; wait for next scrub/play trigger
+        if (activeSubjectMask != null) break
+        delay(60L)
+      } else {
+        delay(targetIntervalMs)
       }
     }
   }
@@ -532,6 +565,7 @@ fun KineticPreviewStage(
           shadowMultiplier = shadowFactor,
           selectedCompositionId = latestSelectedId,
           drawSelectionGuide = !isPlaying,
+          videoContentRect = activeMaskVideoRect,
         )
       }
     }
@@ -789,6 +823,20 @@ private fun findTextureView(view: View): TextureView? {
     }
   }
   return null
+}
+
+private fun computeTextureRectInParent(parent: View, child: View): RectF? {
+  if (parent.width <= 0 || parent.height <= 0 || child.width <= 0 || child.height <= 0) return null
+  val parentLoc = IntArray(2)
+  val childLoc = IntArray(2)
+  parent.getLocationInWindow(parentLoc)
+  child.getLocationInWindow(childLoc)
+  val left = (childLoc[0] - parentLoc[0]).toFloat()
+  val top = (childLoc[1] - parentLoc[1]).toFloat()
+  val right = left + child.width.toFloat()
+  val bottom = top + child.height.toFloat()
+  if (right <= left || bottom <= top) return null
+  return RectF(left, top, right, bottom)
 }
 
 private fun formatReviewTimecode(ms: Long): String {

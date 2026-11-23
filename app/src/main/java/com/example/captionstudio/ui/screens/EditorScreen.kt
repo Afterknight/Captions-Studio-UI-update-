@@ -18,6 +18,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -138,7 +140,7 @@ import kotlin.math.max
 
 private enum class EditorTool(val label: String, val tag: String) {
   STYLE("Style", "editor_tool_style"),
-  THEME("Customize", "editor_tool_theme"),
+  THEME("Theme", "editor_tool_theme"),
   FONT("Font", "editor_tool_font"),
   TIMING("Timing", "editor_tool_timing"),
 }
@@ -292,27 +294,6 @@ fun EditorScreen(
         onOpenExport = onOpenExport,
       )
     },
-    bottomBar = {
-      // Signature Bottom Coral Pill CTA ("Export Video ->") matching mockup
-      Box(
-        modifier =
-          Modifier.fillMaxWidth()
-            .background(
-              Brush.verticalGradient(
-                listOf(Color.Transparent, StudioObsidian.copy(alpha = 0.94f), StudioObsidian)
-              )
-            )
-            .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-      ) {
-        StudioCoralPillButton(
-          text = "Export Video",
-          onClick = onOpenExport,
-          showTrailingArrow = true,
-          modifier = Modifier.testTag("editor_bottom_export_button"),
-        )
-      }
-    },
   ) { innerPadding ->
     BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
       val isWide = maxWidth >= 820.dp
@@ -408,7 +389,9 @@ fun EditorScreen(
                 text = "${playbackSpeed}x",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White,
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
               )
             }
 
@@ -435,7 +418,7 @@ fun EditorScreen(
           // Top-right discreet glass utility pills: AI, Guides, Fullscreen, Video
           Row(
             modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             StageOverlayIconPill(
@@ -464,7 +447,7 @@ fun EditorScreen(
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(horizontal = if (safeZonePlatform != SafeZonePlatform.NONE) 9.dp else 8.dp),
+                modifier = Modifier.padding(horizontal = if (safeZonePlatform != SafeZonePlatform.NONE) 8.dp else 8.dp),
               ) {
                 Icon(
                   imageVector = Icons.Filled.GridOn,
@@ -476,10 +459,12 @@ fun EditorScreen(
                 )
                 if (safeZonePlatform != SafeZonePlatform.NONE) {
                   Text(
-                    text = safeZonePlatform.label,
+                    text = safeZonePlatform.shortLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = StudioCoralLight,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
                   )
                 }
               }
@@ -601,11 +586,11 @@ fun EditorScreen(
             }
           }
 
-          // Progressive-Disclosure Mode Switcher: Creator (Fast) | Pro (Studio)
+          // Progressive-Disclosure Mode Switcher: Creator | Pro + Clone Style (scrollable-safe on 360dp)
           Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
             Row(
               modifier =
@@ -619,33 +604,43 @@ fun EditorScreen(
                 color = if (isCreatorMode) StudioCoral else Color.Transparent,
                 shape = CircleShape,
                 modifier =
-                  Modifier.clip(CircleShape)
+                  Modifier.heightIn(min = 42.dp)
+                    .clip(CircleShape)
                     .clickable { onSetCreatorMode(true) }
                     .testTag("editor_mode_creator"),
               ) {
-                Text(
-                  text = "Creator",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (isCreatorMode) Color.White else StudioTextSecondary,
-                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                )
+                Box(contentAlignment = Alignment.Center) {
+                  Text(
+                    text = "Creator",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isCreatorMode) Color.White else StudioTextSecondary,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                  )
+                }
               }
               Surface(
                 color = if (!isCreatorMode) StudioCoral else Color.Transparent,
                 shape = CircleShape,
                 modifier =
-                  Modifier.clip(CircleShape)
+                  Modifier.heightIn(min = 42.dp)
+                    .clip(CircleShape)
                     .clickable { onSetCreatorMode(false) }
                     .testTag("editor_mode_pro"),
               ) {
-                Text(
-                  text = "Pro Studio",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (!isCreatorMode) Color.White else StudioTextSecondary,
-                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                )
+                Box(contentAlignment = Alignment.Center) {
+                  Text(
+                    text = "Pro Studio",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (!isCreatorMode) Color.White else StudioTextSecondary,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                  )
+                }
               }
             }
 
@@ -653,7 +648,8 @@ fun EditorScreen(
               color = StudioCoralContainer.copy(alpha = 0.55f),
               shape = CircleShape,
               modifier =
-                Modifier.clip(CircleShape)
+                Modifier.heightIn(min = 48.dp)
+                  .clip(CircleShape)
                   .border(1.dp, StudioCoral.copy(alpha = 0.45f), CircleShape)
                   .clickable(onClick = onOpenStyleCloner)
                   .testTag("editor_clone_reel_button"),
@@ -661,19 +657,21 @@ fun EditorScreen(
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
               ) {
                 Icon(
                   imageVector = Icons.Filled.AutoAwesome,
                   contentDescription = null,
                   tint = StudioCoralLight,
-                  modifier = Modifier.size(14.dp),
+                  modifier = Modifier.size(15.dp),
                 )
                 Text(
                   text = "Clone Reel",
                   style = MaterialTheme.typography.labelMedium,
                   fontWeight = FontWeight.SemiBold,
                   color = StudioCoralLight,
+                  maxLines = 1,
+                  softWrap = false,
                 )
               }
             }
@@ -688,7 +686,6 @@ fun EditorScreen(
               safeZonePlatform = safeZonePlatform,
               isBusy = isBusy,
               onApplyPreset = onApplyPreset,
-              onOpenStyleCloner = onOpenStyleCloner,
               onOpenAllPresets = onOpenPresets,
               onScaleAllText = onScaleAllText,
               onSetAllHeight = onSetAllHeight,
@@ -696,6 +693,10 @@ fun EditorScreen(
               onCycleSafeZone = onCycleSafeZone,
               onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
               onAutoTranscribe = { onAutoTranscribeVideo(false) },
+              onOpenScriptEditor = {
+                onSetCreatorMode(false)
+                activeTool = EditorTool.TIMING
+              },
               onWordClickSeek = { ms ->
                 isPlaying = false
                 onPlayheadUpdate(ms)
@@ -931,11 +932,12 @@ fun EditorScreen(
           modifier =
             Modifier.fillMaxSize()
               .verticalScroll(rememberScrollState())
-              .padding(horizontal = 18.dp),
-          verticalArrangement = Arrangement.spacedBy(18.dp),
+              .navigationBarsPadding()
+              .padding(horizontal = 16.dp),
+          verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-          stageCard(Modifier.fillMaxWidth().height(324.dp))
-          controlsDeck(Modifier.fillMaxWidth().padding(bottom = 16.dp))
+          stageCard(Modifier.fillMaxWidth().height(328.dp))
+          controlsDeck(Modifier.fillMaxWidth().padding(bottom = 24.dp))
         }
       }
     }
@@ -1118,7 +1120,10 @@ fun EditorScreen(
               ),
             modifier = Modifier.fillMaxWidth(),
           )
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
             FontRole.entries.forEach { role ->
               FilterChip(
                 selected = roleInput == role,
@@ -1129,7 +1134,13 @@ fun EditorScreen(
                     selectedContainerColor = StudioCoralContainer,
                     selectedLabelColor = StudioCoralLight,
                   ),
-                label = { Text(role.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                label = {
+                  Text(
+                    role.name.lowercase().replaceFirstChar { it.uppercase() },
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                },
               )
             }
           }
@@ -1380,6 +1391,9 @@ private fun EditorToolTile(
         style = MaterialTheme.typography.labelSmall,
         color = if (selected) StudioCoralLight else StudioTextSecondary,
         maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = 4.dp),
       )
     }
   }

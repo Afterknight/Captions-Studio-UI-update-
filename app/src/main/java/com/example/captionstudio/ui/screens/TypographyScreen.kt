@@ -149,7 +149,7 @@ fun TypographyScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
             modifier = Modifier.height(38.dp).testTag("apply_typography_button"),
           ) {
-            Text("Done", fontWeight = FontWeight.SemiBold)
+            Text("Done", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
           }
         },
       )
@@ -294,7 +294,7 @@ fun TypographyScreen(
                 onClick = { roleFilter = null },
                 shape = CircleShape,
                 colors = chipColors,
-                label = { Text("All") },
+                label = { Text("All", maxLines = 1, softWrap = false) },
               )
               FontRole.entries.forEach { role ->
                 FilterChip(
@@ -302,7 +302,7 @@ fun TypographyScreen(
                   onClick = { roleFilter = role },
                   shape = CircleShape,
                   colors = chipColors,
-                  label = { Text(role.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                  label = { Text(role.name.lowercase().replaceFirstChar { it.uppercase() }, maxLines = 1, softWrap = false) },
                 )
               }
             }

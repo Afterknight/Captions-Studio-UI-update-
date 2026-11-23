@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -325,19 +326,33 @@ internal fun StyleQuickPanel(
               onClick = { onAutoTranscribe(false) },
               enabled = !autoTranscribeState.isRunning && project.metadata.hasAudio,
               shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
               colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-              modifier = Modifier.weight(1f).height(44.dp),
+              modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             ) {
-              Text("Transcribe Offline", maxLines = 1, softWrap = false, fontWeight = FontWeight.SemiBold)
+              Text(
+                "Transcribe Offline",
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+              )
             }
             if (geminiSettings.enabled) {
               OutlinedButton(
                 onClick = { onAutoTranscribe(true) },
                 enabled = !autoTranscribeState.isRunning && project.metadata.hasAudio,
                 shape = CircleShape,
-                modifier = Modifier.weight(1f).height(44.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
               ) {
-                Text("AI Transcribe", maxLines = 1, softWrap = false, color = StudioTextPrimary)
+                Text(
+                  "AI Transcribe",
+                  maxLines = 1,
+                  softWrap = false,
+                  overflow = TextOverflow.Ellipsis,
+                  color = StudioTextPrimary,
+                )
               }
             }
           }
@@ -642,18 +657,32 @@ internal fun ThemeWorkspacePanel(
           OutlinedButton(
             onClick = onOpenPresets,
             shape = CircleShape,
-            modifier = Modifier.weight(1f).height(44.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
           ) {
-            Text("All Presets", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+            Text(
+              "All Presets",
+              color = StudioTextPrimary,
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
           OutlinedButton(
             onClick = onOpenTypographyStudio,
             shape = CircleShape,
-            modifier = Modifier.weight(1f).height(44.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
           ) {
             Icon(Icons.Outlined.Palette, contentDescription = null, tint = StudioCoral, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Full Studio", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+            Text(
+              "Full Studio",
+              color = StudioTextPrimary,
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
         }
       }
@@ -744,8 +773,8 @@ internal fun FontWorkspacePanel(
           )
 
           Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -780,7 +809,8 @@ internal fun FontWorkspacePanel(
                 val isSelectedWeight = activeEl.fontWeight == w
                 Box(
                   modifier =
-                    Modifier.clip(CircleShape)
+                    Modifier.heightIn(min = 40.dp)
+                      .clip(CircleShape)
                       .background(if (isSelectedWeight) StudioCoralContainer else StudioElevated)
                       .border(
                         1.dp,
@@ -790,12 +820,15 @@ internal fun FontWorkspacePanel(
                       .clickable {
                         onPatchStyle(activeEl.id, ElementStylePatch(fontWeight = w), true)
                       }
-                      .padding(horizontal = 10.dp, vertical = 9.dp),
+                      .padding(horizontal = 12.dp, vertical = 9.dp),
+                  contentAlignment = Alignment.Center,
                 ) {
                   Text(
                     text = lbl,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (isSelectedWeight) StudioCoralLight else StudioTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
                   )
                 }
               }
@@ -970,6 +1003,7 @@ internal fun TimingWorkspacePanel(
         Box(
           modifier =
             Modifier.weight(1f)
+              .heightIn(min = 44.dp)
               .clip(CircleShape)
               .background(if (selected) StudioElevated else Color.Transparent)
               .border(
@@ -978,16 +1012,18 @@ internal fun TimingWorkspacePanel(
                 shape = CircleShape,
               )
               .clickable { subTab = idx }
-              .padding(vertical = 9.dp)
+              .padding(horizontal = 6.dp, vertical = 9.dp)
               .testTag("editor_tab_${label.lowercase()}"),
           contentAlignment = Alignment.Center,
         ) {
           Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) StudioTextPrimary else StudioTextSecondary,
             maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
           )
         }
       }
@@ -1036,38 +1072,42 @@ internal fun TimingWorkspacePanel(
                     StudioSubtlePill(text = activeComp.region.label)
                   }
 
-                  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
                     OutlinedButton(
                       onClick = onSplit,
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(40.dp),
-                      contentPadding = PaddingValues(horizontal = 8.dp),
+                      modifier = Modifier.heightIn(min = 44.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                       Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null, modifier = Modifier.size(14.dp))
-                      Spacer(Modifier.width(4.dp))
-                      Text("Split", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1)
+                      Spacer(Modifier.width(5.dp))
+                      Text("Split", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1, softWrap = false)
                     }
                     OutlinedButton(
                       onClick = onMerge,
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(40.dp),
-                      contentPadding = PaddingValues(horizontal = 8.dp),
+                      modifier = Modifier.heightIn(min = 44.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                       Icon(Icons.AutoMirrored.Filled.CallMerge, contentDescription = null, modifier = Modifier.size(14.dp))
-                      Spacer(Modifier.width(4.dp))
-                      Text("Merge", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1)
+                      Spacer(Modifier.width(5.dp))
+                      Text("Merge", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1, softWrap = false)
                     }
                     OutlinedButton(
                       onClick = onAddElement,
                       shape = CircleShape,
-                      modifier = Modifier.weight(1f).height(40.dp),
-                      contentPadding = PaddingValues(horizontal = 8.dp),
+                      modifier = Modifier.heightIn(min = 44.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                       Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                      Spacer(Modifier.width(4.dp))
-                      Text("Add", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1)
+                      Spacer(Modifier.width(5.dp))
+                      Text("Add", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1, softWrap = false)
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(44.dp)) {
                       Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete caption", tint = StudioError)
                     }
                   }
@@ -1082,20 +1122,20 @@ internal fun TimingWorkspacePanel(
                         onUpdateTiming(activeComp.id, (activeComp.startMs - 150L).coerceAtLeast(0L), activeComp.endMs)
                       },
                       shape = CircleShape,
-                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                      modifier = Modifier.height(34.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.heightIn(min = 40.dp),
                     ) {
-                      Text("-150ms Start", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary)
+                      Text("-150ms Start", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1, softWrap = false)
                     }
                     OutlinedButton(
                       onClick = {
                         onUpdateTiming(activeComp.id, activeComp.startMs, activeComp.endMs + 200L)
                       },
                       shape = CircleShape,
-                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                      modifier = Modifier.height(34.dp),
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.heightIn(min = 40.dp),
                     ) {
-                      Text("+200ms End", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary)
+                      Text("+200ms End", style = MaterialTheme.typography.labelSmall, color = StudioTextPrimary, maxLines = 1, softWrap = false)
                     }
                     FilterChip(
                       selected = activeComp.hasBehindSubjectElements(),
@@ -1111,6 +1151,8 @@ internal fun TimingWorkspacePanel(
                           if (activeComp.hasBehindSubjectElements()) "Behind Subject: On"
                           else "Behind Subject: Off",
                           style = MaterialTheme.typography.labelSmall,
+                          maxLines = 1,
+                          softWrap = false,
                         )
                       },
                     )
@@ -1213,7 +1255,8 @@ internal fun TimingWorkspacePanel(
                     contentColor = Color.White,
                   ),
                 shape = CircleShape,
-                modifier = Modifier.weight(1f).height(44.dp).testTag("dictate_speech_button"),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("dictate_speech_button"),
               ) {
                 Icon(
                   if (speechState.isListening) Icons.Filled.Stop else Icons.Filled.Mic,
@@ -1221,16 +1264,28 @@ internal fun TimingWorkspacePanel(
                   modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(if (speechState.isListening) "Stop Mic" else "Live Mic", maxLines = 1, softWrap = false)
+                Text(
+                  if (speechState.isListening) "Stop Mic" else "Live Mic",
+                  maxLines = 1,
+                  softWrap = false,
+                  overflow = TextOverflow.Ellipsis,
+                )
               }
               OutlinedButton(
                 onClick = onImportSubtitles,
                 shape = CircleShape,
-                modifier = Modifier.weight(1f).height(44.dp).testTag("import_subtitles_button"),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("import_subtitles_button"),
               ) {
                 Icon(Icons.Filled.FileUpload, contentDescription = null, tint = StudioTextPrimary, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Import SRT/VTT", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+                Text(
+                  "Import SRT/VTT",
+                  color = StudioTextPrimary,
+                  maxLines = 1,
+                  softWrap = false,
+                  overflow = TextOverflow.Ellipsis,
+                )
               }
             }
 
@@ -1398,7 +1453,7 @@ internal fun TimingWorkspacePanel(
               Text("Motion & Transitions", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
               if (activeComp != null) {
                 Row(
-                  modifier = Modifier.fillMaxWidth(),
+                  modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                   StudioSubtlePill(text = "In: ${activeComp.entryAnimation.label} (${activeComp.entryDurationMs}ms)")

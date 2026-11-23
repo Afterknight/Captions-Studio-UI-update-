@@ -154,6 +154,7 @@ class KineticCompositionRenderer(private val context: Context) {
     shadowMultiplier: Float = 1.0f,
     selectedCompositionId: String? = null,
     drawSelectionGuide: Boolean = false,
+    videoContentRect: RectF? = null,
   ) {
     if (canvasWidth <= 0 || canvasHeight <= 0) return
     val active = compositions.firstOrNull { positionMs in it.startMs..it.endMs } ?: return
@@ -209,7 +210,11 @@ class KineticCompositionRenderer(private val context: Context) {
     // Pass 2: Occlude behind-subject text cleanly behind speaker hair/head/shoulders
     if (useMask && subjectMaskBitmap != null) {
       tempSrcRect.set(0, 0, subjectMaskBitmap.width, subjectMaskBitmap.height)
-      tempDstRect.set(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat())
+      if (videoContentRect != null && !videoContentRect.isEmpty) {
+        tempDstRect.set(videoContentRect)
+      } else {
+        tempDstRect.set(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat())
+      }
       canvas.drawBitmap(subjectMaskBitmap, tempSrcRect, tempDstRect, maskErasePaint)
     }
 
@@ -733,10 +738,22 @@ class KineticCompositionRenderer(private val context: Context) {
             if (el.letterSpacingEm != 0f) letterSpacing = el.letterSpacingEm
           }
 
-        if (!textStr.contains(" ") && paint.measureText(textStr) > maxLineWidthPx) {
-          val ratio = (maxLineWidthPx / paint.measureText(textStr)).coerceIn(0.42f, 1f)
+        // Smoothly auto-scale font size so no single word or oversized multi-word phrase overflows
+        // horizontally or wraps awkwardly mid-word.
+        val tokensForFit = textStr.split(" ").filter { it.isNotEmpty() }
+        val widestWordPx = tokensForFit.maxOfOrNull { paint.measureText(it) } ?: paint.measureText(textStr)
+        if (widestWordPx > maxLineWidthPx) {
+          val ratio = (maxLineWidthPx / widestWordPx).coerceIn(0.40f, 1f)
           textSizePx *= ratio
           paint.textSize = textSizePx
+        }
+        // Also prevent excessive multi-line wrapping (>2 lines for dominant, >3 for supporting)
+        val maxAllowedLines = if (el.hierarchyLevel == HierarchyLevel.DOMINANT) 2 else 3
+        var fitAttempts = 0
+        while (fitAttempts < 4 && wrapLines(textStr, paint, maxLineWidthPx).size > maxAllowedLines) {
+          textSizePx = (textSizePx * 0.86f).coerceAtLeast(11f * baseScale)
+          paint.textSize = textSizePx
+          fitAttempts++
         }
 
         if (el.shadowEnabled && el.shadowIntensity > 0.02f) {
@@ -836,18 +853,51 @@ class KineticCompositionRenderer(private val context: Context) {
       if (rowIdx > 0) yCursor += rowGapDefault
 
       val rowHeight = rowItems.maxOfOrNull { it.third.third } ?: 1f
-      val rowTotalWidth =
+      val rawRowTotalWidth =
         rowItems.sumOf { it.third.second.toDouble() }.toFloat() +
           max(0, rowItems.size - 1) * inlineGapPx
+
+      // If an inline side-by-side row exceeds safe horizontal width, scale its items uniformly to fit cleanly
+      val effectiveRowItems =
+        if (rowItems.size > 1 && rawRowTotalWidth > maxLineWidthPx) {
+          val scaleFactor = (maxLineWidthPx / rawRowTotalWidth).coerceIn(0.50f, 1f)
+          rowItems.map { (el, paints, _) ->
+            val newSize = (paints.fill.textSize * scaleFactor).coerceAtLeast(10f * baseScale)
+            paints.fill.textSize = newSize
+            paints.glow?.textSize = newSize
+            paints.stroke?.textSize = newSize
+            val textStr = if (el.uppercase) el.text.uppercase() else el.text
+            val fm = paints.fill.fontMetrics
+            val singleW = paints.fill.measureText(textStr)
+            val tokens = textStr.split(" ").filter { it.isNotEmpty() }
+            val wordSpans = mutableListOf<MeasuredWordSpan>()
+            var xAcc = 0f
+            val spaceW = paints.fill.measureText(" ")
+            tokens.forEachIndexed { tIdx, tok ->
+              wordSpans.add(MeasuredWordSpan(tok, xAcc, el.wordIndices.getOrNull(tIdx)))
+              xAcc += paints.fill.measureText(tok) + if (tIdx < tokens.lastIndex) spaceW else 0f
+            }
+            val line = MeasuredLine(textStr, singleW, fm.ascent, fm.descent, wordSpans)
+            val newH = (line.heightPx * paints.lineSpacingFactor).coerceAtLeast(1f)
+            Triple(el, paints, Triple(listOf(line), singleW, newH))
+          }
+        } else {
+          rowItems
+        }
+
+      val finalRowHeight = effectiveRowItems.maxOfOrNull { it.third.third } ?: rowHeight
+      val rowTotalWidth =
+        effectiveRowItems.sumOf { it.third.second.toDouble() }.toFloat() +
+          max(0, effectiveRowItems.size - 1) * inlineGapPx
       maxTotalRowW = max(maxTotalRowW, rowTotalWidth)
 
       var rowXCursor = -rowTotalWidth / 2f
-      rowItems.forEach { (el, paints, metrics) ->
+      effectiveRowItems.forEach { (el, paints, metrics) ->
         val (lines, blockW, blockH) = metrics
         val baselineAlignedY =
-          yCursor + (rowHeight - blockH) * 0.72f + (el.offsetYEm * paints.fill.textSize)
+          yCursor + (finalRowHeight - blockH) * 0.72f + (el.offsetYEm * paints.fill.textSize)
         val centerOffsetX =
-          if (rowItems.size > 1) {
+          if (effectiveRowItems.size > 1) {
             val itemCenterX = rowXCursor + blockW / 2f
             rowXCursor += blockW + inlineGapPx
             itemCenterX + (el.offsetXEm * paints.fill.textSize)
@@ -877,7 +927,7 @@ class KineticCompositionRenderer(private val context: Context) {
           )
         )
       }
-      yCursor += rowHeight
+      yCursor += finalRowHeight
     }
 
     // Refine left/right stack X alignment cleanly when multi-row LEFT/RIGHT stacked block

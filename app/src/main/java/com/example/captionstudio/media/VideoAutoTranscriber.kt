@@ -137,12 +137,35 @@ class VideoAutoTranscriber(private val context: Context) {
 
     val result =
       if (useOnlineGemini && !geminiApiKey.isNullOrBlank() && geminiModelName.isNotBlank()) {
-        transcribeWithGeminiAndAlign(
-          extracted = extracted,
-          apiKey = geminiApiKey,
-          modelName = geminiModelName,
-          languageTag = languageTag,
-        )
+        val cloudRes =
+          transcribeWithGeminiAndAlign(
+            extracted = extracted,
+            apiKey = geminiApiKey,
+            modelName = geminiModelName,
+            languageTag = languageTag,
+          )
+        if (cloudRes is AutoTranscribeResult.Unavailable) {
+          _state.value =
+            _state.value.copy(
+              stageLabel = "Gemini busy — switching to offline speech engine...",
+              progressFraction = 0.44f,
+            )
+          when (
+            val offlineFallback =
+              transcribeOfflineWithAcousticAlignment(
+                extracted = extracted,
+                languageTag = languageTag,
+              )
+          ) {
+            is AutoTranscribeResult.Success ->
+              offlineFallback.copy(
+                engineLabel = "Offline Fallback (Gemini busy)",
+              )
+            else -> cloudRes
+          }
+        } else {
+          cloudRes
+        }
       } else {
         transcribeOfflineWithAcousticAlignment(
           extracted = extracted,

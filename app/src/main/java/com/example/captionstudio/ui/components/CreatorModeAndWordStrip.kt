@@ -3,6 +3,7 @@ package com.example.captionstudio.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,16 +14,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -91,7 +94,6 @@ fun CreatorModeQuickPanel(
   safeZonePlatform: SafeZonePlatform,
   isBusy: Boolean,
   onApplyPreset: (String) -> Unit,
-  onOpenStyleCloner: () -> Unit,
   onOpenAllPresets: () -> Unit,
   onScaleAllText: (Float) -> Unit,
   onSetAllHeight: (Float) -> Unit,
@@ -99,6 +101,7 @@ fun CreatorModeQuickPanel(
   onCycleSafeZone: () -> Unit,
   onToggleDepthMask: () -> Unit,
   onAutoTranscribe: () -> Unit,
+  onOpenScriptEditor: () -> Unit,
   onWordClickSeek: (Long) -> Unit,
   onWordQuickEdit: (wordIndex: Int, newText: String, emphasis: HierarchyLevel, behindSubject: Boolean) -> Unit,
   onWordDelete: (wordIndex: Int) -> Unit,
@@ -150,38 +153,6 @@ fun CreatorModeQuickPanel(
           contentPadding = PaddingValues(horizontal = 16.dp),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          // Signature "Clone Reel Style" pill first!
-          item(key = "clone_style_pill") {
-            Surface(
-              onClick = onOpenStyleCloner,
-              color = StudioCoralContainer,
-              shape = RoundedCornerShape(14.dp),
-              modifier =
-                Modifier.height(44.dp)
-                  .border(1.dp, StudioCoral.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
-                  .testTag("creator_clone_style_button"),
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Icon(
-                  Icons.Filled.AutoFixHigh,
-                  contentDescription = null,
-                  tint = StudioCoralLight,
-                  modifier = Modifier.size(16.dp),
-                )
-                Text(
-                  text = "Clone Reel",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.SemiBold,
-                  color = StudioCoralLight,
-                )
-              }
-            }
-          }
-
           items(allPresets, key = { it.id }) { preset ->
             val selected = project.presetId == preset.id
             Surface(
@@ -189,7 +160,7 @@ fun CreatorModeQuickPanel(
               color = if (selected) StudioCoral else StudioElevated,
               shape = RoundedCornerShape(14.dp),
               modifier =
-                Modifier.height(44.dp)
+                Modifier.heightIn(min = 48.dp)
                   .border(
                     1.dp,
                     if (selected) StudioCoralLight else StudioHairline,
@@ -197,7 +168,7 @@ fun CreatorModeQuickPanel(
                   ),
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 12.dp),
+                modifier = Modifier.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
               ) {
@@ -215,6 +186,7 @@ fun CreatorModeQuickPanel(
                   fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                   color = if (selected) Color.White else StudioTextPrimary,
                   maxLines = 1,
+                  softWrap = false,
                 )
               }
             }
@@ -271,9 +243,12 @@ fun CreatorModeQuickPanel(
           },
         )
 
-        // Quick Creator Pills: Behind-Subject, Safe Zone, Auto-Transcribe
+        // Quick Creator Pills: Horizontally scrollable so labels NEVER stack vertically on 360dp phones
         Row(
-          modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+          modifier =
+            Modifier.fillMaxWidth()
+              .horizontalScroll(rememberScrollState())
+              .padding(top = 4.dp),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           val behindActive = activeComp?.hasBehindSubjectElements() == true
@@ -282,33 +257,63 @@ fun CreatorModeQuickPanel(
             label = if (behindActive) "Behind: ON" else "Behind",
             active = behindActive,
             onClick = onToggleDepthMask,
-            modifier = Modifier.weight(1f).testTag("creator_behind_toggle"),
+            modifier = Modifier.testTag("creator_behind_toggle"),
           )
           CreatorQuickToggleChip(
             icon = Icons.Filled.PhoneAndroid,
             label =
               if (safeZonePlatform == SafeZonePlatform.NONE) "Safe Zone"
-              else safeZonePlatform.shortLabel,
+              else "Zone: ${safeZonePlatform.shortLabel}",
             active = safeZonePlatform != SafeZonePlatform.NONE,
             onClick = onCycleSafeZone,
-            modifier = Modifier.weight(1f).testTag("creator_safe_zone_toggle"),
+            modifier = Modifier.testTag("creator_safe_zone_toggle"),
           )
           CreatorQuickToggleChip(
             icon = Icons.Filled.GraphicEq,
             label = if (isBusy) "Working…" else "Transcribe",
             active = false,
             onClick = onAutoTranscribe,
-            modifier = Modifier.weight(1f).testTag("creator_transcribe_button"),
+            modifier = Modifier.testTag("creator_transcribe_button"),
           )
         }
       }
     }
 
-    // Descript-Style Word-Tap Transcript Editor
+    // Descript-Style Word-Tap Transcript Editor (derives editable words from compositions if wordTimings empty)
+    val fallbackWords =
+      remember(project.wordTimings, project.compositions) {
+        if (project.wordTimings.isNotEmpty()) {
+          project.wordTimings
+        } else {
+          project.compositions.flatMap { comp ->
+            if (comp.wordMappings.isNotEmpty()) {
+              comp.wordMappings
+            } else {
+              val tokens =
+                comp.originalText.ifBlank { comp.elements.joinToString(" ") { it.text } }
+                  .trim()
+                  .split(Regex("\\s+"))
+                  .filter { it.isNotBlank() }
+              val dur = (comp.endMs - comp.startMs).coerceAtLeast(200L)
+              val slice = if (tokens.isEmpty()) dur else dur / tokens.size
+              tokens.mapIndexed { idx, w ->
+                val ws = comp.startMs + slice * idx
+                val we = if (idx == tokens.lastIndex) comp.endMs else (ws + slice).coerceAtLeast(ws + 80L)
+                WordTiming(word = w, startMs = ws, endMs = we, isEstimated = true)
+              }
+            }
+          }
+        }
+      }
+
     DescriptWordTapStrip(
-      wordTimings = project.wordTimings,
+      wordTimings = fallbackWords,
       activeComp = activeComp,
       playheadMs = playheadMs,
+      hasVideo = project.videoUriString.isNotBlank(),
+      isBusy = isBusy,
+      onAutoTranscribe = onAutoTranscribe,
+      onOpenScriptEditor = onOpenScriptEditor,
       onSeekWord = onWordClickSeek,
       onQuickEditWord = onWordQuickEdit,
       onDeleteWord = onWordDelete,
@@ -322,6 +327,10 @@ fun DescriptWordTapStrip(
   wordTimings: List<WordTiming>,
   activeComp: CaptionComposition?,
   playheadMs: Long,
+  hasVideo: Boolean = true,
+  isBusy: Boolean = false,
+  onAutoTranscribe: () -> Unit = {},
+  onOpenScriptEditor: () -> Unit = {},
   onSeekWord: (Long) -> Unit,
   onQuickEditWord: (wordIndex: Int, newText: String, emphasis: HierarchyLevel, behindSubject: Boolean) -> Unit,
   onDeleteWord: (wordIndex: Int) -> Unit,
@@ -336,15 +345,17 @@ fun DescriptWordTapStrip(
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text(
             text = "Tap Any Word to Edit",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             color = StudioTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           Text(
             text = "Fix typos, boost to Hero/Accent, or put behind subject",
@@ -357,17 +368,68 @@ fun DescriptWordTapStrip(
             text = "${wordTimings.size} words",
             style = MaterialTheme.typography.labelSmall,
             color = StudioCoralLight,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
           )
         }
       }
 
       if (wordTimings.isEmpty()) {
-        Text(
-          text = "Tap Transcribe or add captions in Timing to edit word-by-word.",
-          style = MaterialTheme.typography.bodySmall,
-          color = StudioTextSecondary,
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text(
+            text = "No caption words yet. Auto-transcribe offline or type a script to edit word-by-word.",
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioTextSecondary,
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            if (hasVideo) {
+              Button(
+                onClick = onAutoTranscribe,
+                enabled = !isBusy,
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("word_strip_transcribe_button"),
+              ) {
+                Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Transcribe Offline", maxLines = 1, softWrap = false)
+              }
+            }
+            Surface(
+              onClick = onOpenScriptEditor,
+              color = StudioElevated,
+              shape = CircleShape,
+              modifier =
+                Modifier.heightIn(min = 48.dp)
+                  .border(1.dp, StudioHairlineStrong, CircleShape)
+                  .testTag("word_strip_open_script_button"),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                Icon(
+                  Icons.Filled.Edit,
+                  contentDescription = null,
+                  tint = StudioCoralLight,
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = "Type Script",
+                  style = MaterialTheme.typography.labelLarge,
+                  color = StudioTextPrimary,
+                  maxLines = 1,
+                  softWrap = false,
+                )
+              }
+            }
+          }
+        }
       } else {
         FlowRow(
           modifier = Modifier.fillMaxWidth(),
@@ -466,27 +528,30 @@ fun DescriptWordTapStrip(
               style = MaterialTheme.typography.labelMedium,
               color = StudioTextSecondary,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
               FilterChip(
                 selected = selectedLevel == HierarchyLevel.SUPPORTING,
                 onClick = { selectedLevel = HierarchyLevel.SUPPORTING },
                 shape = CircleShape,
                 colors = chipColors,
-                label = { Text("Normal") },
+                label = { Text("Normal", maxLines = 1, softWrap = false) },
               )
               FilterChip(
                 selected = selectedLevel == HierarchyLevel.DOMINANT,
                 onClick = { selectedLevel = HierarchyLevel.DOMINANT },
                 shape = CircleShape,
                 colors = chipColors,
-                label = { Text("Hero") },
+                label = { Text("Hero", maxLines = 1, softWrap = false) },
               )
               FilterChip(
                 selected = selectedLevel == HierarchyLevel.EXPRESSIVE,
                 onClick = { selectedLevel = HierarchyLevel.EXPRESSIVE },
                 shape = CircleShape,
                 colors = chipColors,
-                label = { Text("Accent") },
+                label = { Text("Accent", maxLines = 1, softWrap = false) },
               )
             }
 
@@ -595,11 +660,11 @@ private fun CreatorQuickToggleChip(
     shape = CircleShape,
     modifier =
       modifier
-        .height(44.dp)
+        .heightIn(min = 48.dp)
         .border(1.dp, if (active) StudioCoral else StudioHairline, CircleShape),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 8.dp),
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
@@ -607,14 +672,16 @@ private fun CreatorQuickToggleChip(
         imageVector = icon,
         contentDescription = null,
         tint = if (active) StudioCoralLight else StudioTextSecondary,
-        modifier = Modifier.size(15.dp),
+        modifier = Modifier.size(16.dp),
       )
-      Spacer(Modifier.width(5.dp))
+      Spacer(Modifier.width(6.dp))
       Text(
         text = label,
         style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Medium,
         color = if (active) StudioCoralLight else StudioTextPrimary,
         maxLines = 1,
+        softWrap = false,
         overflow = TextOverflow.Ellipsis,
       )
     }

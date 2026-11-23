@@ -127,17 +127,24 @@ object LocalCompositionEngine {
     val regions =
       (analysisReport.safeRegionsRanked + preset.preferredRegions)
         .distinct()
-        .ifEmpty { listOf(SafeRegion.UPPER_CENTER, SafeRegion.LOWER_CENTER) }
+        .ifEmpty { listOf(SafeRegion.LOWER_CENTER, SafeRegion.UPPER_CENTER) }
 
     val heavyFont = fontOverrides.heavyFontId ?: preset.heavyFontId
     val supportingFont = fontOverrides.supportingFontId ?: preset.supportingFontId
     val expressiveFont = fontOverrides.expressiveFontId ?: preset.expressiveFontId
 
-    val hasSubject = analysisReport.subjectCoverageFraction > 0.08f || analysisReport.faceRegions.isNotEmpty()
+    val globalHasSubject =
+      analysisReport.subjectCoverageFraction > 0.08f || analysisReport.faceRegions.isNotEmpty()
+
+    // Shot-level stability memory: keep captions anchored in the same clean zone throughout a shot
+    // unless a scene cut, behind-subject hero callout, or subject/face obstruction requires a change.
+    var lastShotKey = -1
+    var anchoredShotRegion: SafeRegion? = null
 
     return nonEmptyPhrases.mapIndexed { phraseIdx, phraseWords ->
       val startMs = phraseWords.first().startMs
       val endMs = max(phraseWords.last().endMs, startMs + 480L)
+      val midMs = (startMs + endMs) / 2L
       val rawSentence = phraseWords.joinToString(" ") { it.word }
       val lowerPhrase = phraseWords.joinToString(" ") { cleanToken(it.word) }.trim()
       val maxSalience =
@@ -145,18 +152,25 @@ object LocalCompositionEngine {
           scoreWordSalience(phraseWords[idx].word, idx, phraseWords.size)
         } ?: 0f
 
+      val shotIndex = findShotIndexForTime(midMs, analysisReport)
+      val shot = analysisReport.shotAnalyses.getOrNull(shotIndex)
+      val shotHasSubject =
+        if (shot != null) shot.subjectCoverage > 0.08f || shot.headVetoRect != null
+        else globalHasSubject
+      val isSplitActive = shot?.isSplitScreen ?: analysisReport.isSplitScreenDetected
+
       val stopCount = phraseWords.count { cleanToken(it.word) in stopWords }
       val isWhisperBeat =
         phraseWords.size in 2..3 &&
           lowerPhrase !in actionCallouts &&
           phraseWords.none { cleanToken(it.word) in dramaticWords } &&
-          (phraseWords.size == 2 || stopCount >= 2 || maxSalience < 3.6f || phraseIdx % 4 == 2)
+          (phraseWords.size == 2 || stopCount >= 2 || maxSalience < 3.6f)
 
       val isActionGlow = lowerPhrase in actionCallouts || lowerPhrase.contains("link in bio")
       val isNegationStack =
         cleanToken(phraseWords.first().word) == "no" && phraseWords.size >= 3
       val isSeamCallout =
-        (analysisReport.isSplitScreenDetected && phraseIdx % 3 != 0) ||
+        isSplitActive ||
           (phraseWords.size in 2..4 && cleanToken(phraseWords.first().word) in seamTriggerWords)
 
       val styleVariant =
@@ -168,16 +182,25 @@ object LocalCompositionEngine {
           else -> CompositionStyleVariant.HERO_STACK
         }
 
-      val region =
-        chooseRegionForVariant(
+      // Reset anchored zone only on a genuine scene cut / new shot
+      if (shotIndex != lastShotKey) {
+        lastShotKey = shotIndex
+        anchoredShotRegion = null
+      }
+
+      val (region, updatedShotAnchor) =
+        chooseFrameAwareRegion(
           styleVariant = styleVariant,
-          phraseIdx = phraseIdx,
+          shot = shot,
+          currentShotAnchor = anchoredShotRegion,
           rankedRegions = regions,
           analysisReport = analysisReport,
+          shotHasSubject = shotHasSubject,
         )
+      anchoredShotRegion = updatedShotAnchor
 
       val useBehindSubject =
-        hasSubject &&
+        shotHasSubject &&
           (styleVariant == CompositionStyleVariant.HERO_STACK ||
             (styleVariant == CompositionStyleVariant.GLOW_BANNER && region == SafeRegion.UPPER_CENTER))
 
@@ -190,7 +213,7 @@ object LocalCompositionEngine {
           else -> TextAlignment.CENTER
         }
 
-      val elements =
+      val rawElements =
         when (styleVariant) {
           CompositionStyleVariant.WHISPER_NEGATIVE_SPACE ->
             composeWhisperBeatElements(
@@ -234,6 +257,10 @@ object LocalCompositionEngine {
             )
         }
 
+      // Auto-readability contrast guard based on the actual background brightness/clutter behind this zone
+      val zoneMetrics = shot?.zoneMetrics?.get(region)
+      val elements = applyAutoReadabilityGuard(rawElements, zoneMetrics)
+
       CaptionComposition(
         id = UUID.randomUUID().toString(),
         startMs = startMs,
@@ -256,44 +283,148 @@ object LocalCompositionEngine {
     }
   }
 
-  private fun chooseRegionForVariant(
+  private fun findShotIndexForTime(timeMs: Long, report: VideoAnalysisReport): Int {
+    if (report.shotAnalyses.isNotEmpty()) {
+      val exact = report.shotAnalyses.indexOfFirst { timeMs in it.startMs..it.endMs }
+      if (exact >= 0) return exact
+      // Fallback to nearest shot by midpoint
+      return report.shotAnalyses.indices.minByOrNull { idx ->
+        val s = report.shotAnalyses[idx]
+        val mid = if (s.endMs == Long.MAX_VALUE) s.startMs else (s.startMs + s.endMs) / 2L
+        kotlin.math.abs(mid - timeMs)
+      } ?: 0
+    }
+    // Derive shot index from sceneChangeTimestampsMs when full shotAnalyses aren't present
+    var idx = 0
+    for (cutMs in report.sceneChangeTimestampsMs) {
+      if (timeMs >= cutMs) idx++
+    }
+    return idx
+  }
+
+  /**
+   * Frame-aware, shot-stable region selector:
+   * - Never picks regions randomly via phraseIdx % N.
+   * - Keeps captions anchored consistently inside the same shot.
+   * - Vetoes any zone overlapping the speaker's face/eyes/mouth.
+   * - Only uses LEFT_SIDE / RIGHT_SIDE when wide & empty.
+   */
+  private fun chooseFrameAwareRegion(
     styleVariant: CompositionStyleVariant,
-    phraseIdx: Int,
+    shot: com.example.captionstudio.domain.model.ShotVisualAnalysis?,
+    currentShotAnchor: SafeRegion?,
+    rankedRegions: List<SafeRegion>,
+    analysisReport: VideoAnalysisReport,
+    shotHasSubject: Boolean,
+  ): Pair<SafeRegion, SafeRegion> {
+    if (styleVariant == CompositionStyleVariant.SEAM_CALLOUT) {
+      return SafeRegion.SEAM_CENTER to (currentShotAnchor ?: SafeRegion.SEAM_CENTER)
+    }
+
+    // Determine the shot's clean, stable anchor zone once per shot
+    val baseShotZone =
+      currentShotAnchor ?: computeCleanShotAnchor(shot, rankedRegions, analysisReport)
+
+    if (shot == null) {
+      // No frame metrics available yet (e.g., script-only project): stay cleanly anchored on baseShotZone!
+      return when (styleVariant) {
+        CompositionStyleVariant.LEFT_ANCHOR_STACK -> SafeRegion.LEFT_SIDE to baseShotZone
+        else -> baseShotZone to baseShotZone
+      }
+    }
+
+    val zones = shot.zoneMetrics
+    val currentBlockedByFace = zones[baseShotZone]?.isBlockedByFace == true
+    val safeAnchor =
+      if (currentBlockedByFace) {
+        computeCleanShotAnchor(shot, rankedRegions, analysisReport)
+      } else {
+        baseShotZone
+      }
+
+    // Deliberate behind-subject hero callouts may step cleanly into unblocked UPPER_CENTER headroom
+    if (styleVariant == CompositionStyleVariant.HERO_STACK && shotHasSubject) {
+      val upperMetrics = zones[SafeRegion.UPPER_CENTER]
+      if (upperMetrics != null && !upperMetrics.isBlockedByFace && upperMetrics.edgeClutter < 28f) {
+        return SafeRegion.UPPER_CENTER to safeAnchor
+      }
+    }
+
+    // Left staircase only uses LEFT_SIDE if left margin is actually wide & empty and not face-blocked
+    if (styleVariant == CompositionStyleVariant.LEFT_ANCHOR_STACK) {
+      val leftMetrics = zones[SafeRegion.LEFT_SIDE]
+      if (leftMetrics != null && !leftMetrics.isBlockedByFace && leftMetrics.isWideAndEmpty) {
+        return SafeRegion.LEFT_SIDE to safeAnchor
+      }
+    }
+
+    // Stay rock-steady on the shot's clean anchor!
+    return safeAnchor to safeAnchor
+  }
+
+  private fun computeCleanShotAnchor(
+    shot: com.example.captionstudio.domain.model.ShotVisualAnalysis?,
     rankedRegions: List<SafeRegion>,
     analysisReport: VideoAnalysisReport,
   ): SafeRegion {
-    return when (styleVariant) {
-      CompositionStyleVariant.SEAM_CALLOUT -> SafeRegion.SEAM_CENTER
-      CompositionStyleVariant.LEFT_ANCHOR_STACK -> SafeRegion.LEFT_SIDE
-      CompositionStyleVariant.GLOW_BANNER ->
-        if (phraseIdx % 2 == 0) SafeRegion.UPPER_CENTER else SafeRegion.LOWER_CENTER
-      CompositionStyleVariant.WHISPER_NEGATIVE_SPACE -> {
-        val quiet =
-          rankedRegions.filter {
-            it == SafeRegion.RIGHT_SIDE ||
-              it == SafeRegion.UPPER_RIGHT ||
-              it == SafeRegion.LOWER_CENTER ||
-              it == SafeRegion.CENTER
-          }
-        if (quiet.isNotEmpty()) quiet[phraseIdx % quiet.size] else SafeRegion.LOWER_CENTER
-      }
-      CompositionStyleVariant.HERO_STACK,
-      CompositionStyleVariant.STANDARD -> {
-        // Behind-subject editorial hero stacks look strongest in upper headroom or upper-left
-        val primaryFace = analysisReport.faceRegions.firstOrNull()
-        if (primaryFace != null && primaryFace.top < 0.22f) {
-          listOf(SafeRegion.UPPER_LEFT, SafeRegion.RIGHT_SIDE, SafeRegion.LOWER_CENTER)[phraseIdx % 3]
+    if (shot != null && shot.zoneMetrics.isNotEmpty()) {
+      return com.example.captionstudio.media.VideoAnalysisService.selectBestZoneForShot(
+        zoneMetrics = shot.zoneMetrics,
+        isSplitScreen = shot.isSplitScreen,
+        subjectCoverage = shot.subjectCoverage,
+      )
+    }
+    // Fallback when no frame-level shot metrics exist: pick cleanest non-face-blocking vertical anchor
+    val primaryFace = analysisReport.faceRegions.firstOrNull()
+    if (primaryFace != null) {
+      return if (primaryFace.bottom < 0.65f) SafeRegion.LOWER_CENTER
+      else if (primaryFace.top > 0.34f) SafeRegion.UPPER_CENTER
+      else SafeRegion.LOWER_CENTER
+    }
+    return rankedRegions.firstOrNull {
+      it == SafeRegion.LOWER_CENTER || it == SafeRegion.UPPER_CENTER || it == SafeRegion.CENTER
+    } ?: SafeRegion.LOWER_CENTER
+  }
+
+  /**
+   * Auto-Readability Guard:
+   * Inspects the measured luminance and edge clutter behind the chosen placement zone.
+   * When bright (>165) or visually busy (>22), automatically boosts shadow depth, adds a crisp
+   * dark outline stroke, and adds a subtle translucent dark pill when foreground legibility needs it.
+   */
+  internal fun applyAutoReadabilityGuard(
+    elements: List<CompositionElement>,
+    zoneMetrics: com.example.captionstudio.domain.model.ZoneVisualMetrics?,
+  ): List<CompositionElement> {
+    if (zoneMetrics == null) return elements
+    val isBright = zoneMetrics.meanLuminance >= 165f
+    val isVeryBright = zoneMetrics.meanLuminance >= 195f
+    val isBusy = zoneMetrics.edgeClutter >= 22f
+    if (!isBright && !isBusy) return elements
+
+    return elements.map { el ->
+      val boostedShadow = max(el.shadowIntensity, if (isVeryBright || isBusy) 1.65f else 1.40f)
+      val needsStroke = el.strokeWidthFactor < 1.6f
+      val strokeWidth =
+        if (needsStroke) {
+          if (el.hierarchyLevel == HierarchyLevel.DOMINANT) 2.0f else 1.6f
         } else {
-          val preferred =
-            listOf(
-              SafeRegion.UPPER_CENTER,
-              SafeRegion.UPPER_LEFT,
-              SafeRegion.UPPER_CENTER,
-              SafeRegion.LOWER_CENTER,
-            )
-          preferred[phraseIdx % preferred.size]
+          el.strokeWidthFactor
         }
-      }
+      val needsPill =
+        el.depthLayer == DepthLayer.IN_FRONT &&
+          el.backgroundColorHex == null &&
+          (isVeryBright || (isBright && isBusy))
+
+      el.copy(
+        shadowEnabled = true,
+        shadowIntensity = boostedShadow,
+        strokeWidthFactor = strokeWidth,
+        strokeColorHex = if (needsStroke) "#101016" else el.strokeColorHex,
+        backgroundColorHex = if (needsPill) "#121218" else el.backgroundColorHex,
+        backgroundAlpha = if (needsPill) 0.62f else el.backgroundAlpha,
+        backgroundCornerRadiusDp = if (needsPill) 10f else el.backgroundCornerRadiusDp,
+      )
     }
   }
 

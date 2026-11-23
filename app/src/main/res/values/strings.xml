@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Caption Studio</string>
+    <string name="app_name">Captions Studio v-beta-0</string>
     <string name="gallery_subtitle">Project Gallery</string>
     <string name="gallery_settings_cd">Settings</string>
     <string name="gallery_search_placeholder">Search projects by name…</string>

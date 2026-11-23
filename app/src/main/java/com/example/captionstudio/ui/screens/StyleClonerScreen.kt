@@ -10,8 +10,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,12 +22,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -221,8 +225,8 @@ fun StyleClonerScreen(
                 color = StudioTextSecondary,
               )
               Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
                 ReferenceCropBand.entries.forEach { band ->
                   FilterChip(
@@ -237,9 +241,9 @@ fun StyleClonerScreen(
                       Text(
                         band.label.replace(" Video", "").replace(" Band", "").replace(" Half", ""),
                         maxLines = 1,
+                        softWrap = false,
                       )
                     },
-                    modifier = Modifier.weight(1f),
                   )
                 }
               }
@@ -328,72 +332,131 @@ fun StyleClonerScreen(
               ) {
                 Row(
                   modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
                   verticalAlignment = Alignment.CenterVertically,
                 ) {
-                  Column {
+                  Column(modifier = Modifier.weight(1f)) {
                     Text(
                       text = "Style Match Studio",
                       style = MaterialTheme.typography.titleMedium,
                       fontWeight = FontWeight.SemiBold,
                       color = StudioTextPrimary,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                       text =
-                        "${activeReport.framesScanned} frames • ${activeReport.sceneCutsDetected} scene cuts analyzed",
+                        "${activeReport.framesScanned} frames • ${activeReport.sceneCutsDetected} cuts analyzed",
                       style = MaterialTheme.typography.labelSmall,
                       color = StudioTextSecondary,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
                     )
                   }
                   Surface(color = StudioCoralContainer, shape = CircleShape) {
                     Text(
-                      text = "${activeReport.confidencePercent}% DNA Match",
+                      text = "${activeReport.confidencePercent}% Match",
                       style = MaterialTheme.typography.labelMedium,
                       fontWeight = FontWeight.SemiBold,
                       color = StudioCoralLight,
+                      maxLines = 1,
+                      softWrap = false,
                       modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                     )
                   }
                 }
 
-                // Side-by-side Split Preview: Reference Clip vs Live Animated Cloned Style
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                  Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                  ) {
-                    Text(
-                      "REFERENCE",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = StudioTextSecondary,
-                    )
-                    referenceUri?.let { uri ->
-                      ExportedVideoReviewPlayer(
-                        videoUri = uri,
-                        aspectRatio = AspectRatioOption.PORTRAIT_9_16,
-                      )
+                // Adaptive Preview: Stack vertically on narrow phones (<520dp), side-by-side on tablets/wide screens
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                  val sideBySide = maxWidth >= 500.dp
+                  if (sideBySide) {
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          "REFERENCE",
+                          style = MaterialTheme.typography.labelSmall,
+                          color = StudioTextSecondary,
+                          maxLines = 1,
+                          softWrap = false,
+                        )
+                        referenceUri?.let { uri ->
+                          ExportedVideoReviewPlayer(
+                            videoUri = uri,
+                            aspectRatio = AspectRatioOption.PORTRAIT_9_16,
+                          )
+                        }
+                      }
+                      Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          "CLONED LIVE",
+                          style = MaterialTheme.typography.labelSmall,
+                          color = StudioCoralLight,
+                          fontWeight = FontWeight.SemiBold,
+                          maxLines = 1,
+                          softWrap = false,
+                        )
+                        LiveAnimatedClonedPreview(
+                          preset = draftPreset,
+                          renderer = renderer,
+                          modifier = Modifier.fillMaxWidth().height(280.dp),
+                        )
+                      }
                     }
-                  }
-                  Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                  ) {
-                    Text(
-                      "CLONED LIVE",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = StudioCoralLight,
-                      fontWeight = FontWeight.SemiBold,
-                    )
-                    LiveAnimatedClonedPreview(
-                      preset = draftPreset,
-                      renderer = renderer,
-                      modifier = Modifier.fillMaxWidth().height(280.dp),
-                    )
+                  } else {
+                    Column(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          "CLONED LIVE PREVIEW",
+                          style = MaterialTheme.typography.labelSmall,
+                          color = StudioCoralLight,
+                          fontWeight = FontWeight.SemiBold,
+                          maxLines = 1,
+                          softWrap = false,
+                        )
+                        LiveAnimatedClonedPreview(
+                          preset = draftPreset,
+                          renderer = renderer,
+                          modifier = Modifier.fillMaxWidth().height(220.dp),
+                        )
+                      }
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Text(
+                          "REFERENCE CLIP",
+                          style = MaterialTheme.typography.labelSmall,
+                          color = StudioTextSecondary,
+                          maxLines = 1,
+                          softWrap = false,
+                        )
+                        referenceUri?.let { uri ->
+                          ExportedVideoReviewPlayer(
+                            videoUri = uri,
+                            aspectRatio = AspectRatioOption.PORTRAIT_9_16,
+                          )
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -453,7 +516,10 @@ fun StyleClonerScreen(
                   style = MaterialTheme.typography.labelMedium,
                   color = StudioTextSecondary,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                   activeReport.alternativeHeavyFontIds.distinct().take(3).forEach { fontId ->
                     val desc = FontRegistry.findById(fontId)
                     FilterChip(
@@ -463,7 +529,7 @@ fun StyleClonerScreen(
                       },
                       shape = CircleShape,
                       colors = chipColors,
-                      label = { Text(desc.displayName, maxLines = 1) },
+                      label = { Text(desc.displayName, maxLines = 1, softWrap = false) },
                     )
                   }
                 }
@@ -550,7 +616,13 @@ fun StyleClonerScreen(
                 ) {
                   Icon(Icons.Filled.Share, contentDescription = null, tint = StudioCoralLight)
                   Spacer(Modifier.width(8.dp))
-                  Text("Share Zero-Server Style Link", color = StudioTextPrimary)
+                  Text(
+                    "Share Style Link",
+                    color = StudioTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                  )
                 }
               }
             }
@@ -591,7 +663,7 @@ private fun LiveAnimatedClonedPreview(
     mutableLongStateOf(0L)
   }
 
-  LaunchedEffect(preset.id, preset.heavyFontId) {
+  LaunchedEffect(preset.id, preset.heavyFontId, preset.preferBehindSubject, preset.dominantColorHex) {
     var lastFrame = -1L
     while (true) {
       withFrameMillis { frameMs ->
@@ -643,6 +715,23 @@ private fun LiveAnimatedClonedPreview(
           compositions = previewComps,
           positionMs = tickMs,
           shadowMultiplier = preset.shadowRadiusFactor,
+        )
+      }
+    }
+    if (preset.preferBehindSubject) {
+      Surface(
+        color = StudioCoralContainer.copy(alpha = 0.9f),
+        shape = CircleShape,
+        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+      ) {
+        Text(
+          text = "Behind Depth ON",
+          style = MaterialTheme.typography.labelSmall,
+          color = StudioCoralLight,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          softWrap = false,
+          modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
         )
       }
     }

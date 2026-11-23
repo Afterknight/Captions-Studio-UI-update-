@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -213,8 +214,8 @@ fun AutoTranscribeControlCard(
               contentColor = Color.White,
             ),
           shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-          modifier = Modifier.weight(1f).height(44.dp).testTag("auto_transcribe_offline_button"),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+          modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("auto_transcribe_offline_button"),
         ) {
           Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(Modifier.width(6.dp))
@@ -232,8 +233,8 @@ fun AutoTranscribeControlCard(
           onClick = onAutoTranscribeOnline,
           enabled = hasVideo && hasAudio && geminiEnabled && !transcribeState.isRunning,
           shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-          modifier = Modifier.weight(1f).height(44.dp).testTag("auto_transcribe_online_button"),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+          modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("auto_transcribe_online_button"),
         ) {
           Icon(
             Icons.Filled.AutoAwesome,

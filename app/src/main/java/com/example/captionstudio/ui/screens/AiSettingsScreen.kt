@@ -3,6 +3,7 @@ package com.example.captionstudio.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -68,12 +71,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.captionstudio.domain.model.ConnectionStatus
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
@@ -240,7 +245,10 @@ fun AiSettingsScreen(
 
               Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Preview Quality", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                   PreviewQualityMode.entries.forEach { mode ->
                     FilterChip(
                       selected = previewQualityMode == mode,
@@ -529,15 +537,17 @@ fun AiSettingsScreen(
                   enabled = apiKeyInput.isNotBlank() && !isTesting,
                   colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
                   shape = CircleShape,
-                  modifier = Modifier.weight(1f).height(46.dp).testTag("save_api_key_button"),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                  modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("save_api_key_button"),
                 ) {
-                  Text("Save Key", maxLines = 1, softWrap = false, fontWeight = FontWeight.SemiBold)
+                  Text("Save Key", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                   onClick = onTestConnection,
                   enabled = hasSavedApiKey && !isTesting,
                   shape = CircleShape,
-                  modifier = Modifier.weight(1f).height(46.dp).testTag("test_connection_button"),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                  modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("test_connection_button"),
                 ) {
                   if (isTesting) {
                     CircularProgressIndicator(
@@ -546,16 +556,16 @@ fun AiSettingsScreen(
                       modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("Testing", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+                    Text("Testing", color = StudioTextPrimary, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                   } else {
-                    Text("Test", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+                    Text("Test", color = StudioTextPrimary, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                   }
                 }
                 if (hasSavedApiKey) {
                   IconButton(
                     onClick = onRemoveApiKey,
                     enabled = !isTesting,
-                    modifier = Modifier.size(46.dp).testTag("remove_api_key_button"),
+                    modifier = Modifier.size(48.dp).testTag("remove_api_key_button"),
                   ) {
                     Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove API key", tint = StudioError)
                   }
@@ -790,7 +800,7 @@ fun AiSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             Text(
-              text = "Caption Studio",
+              text = stringResource(R.string.app_name),
               style = MaterialTheme.typography.labelLarge,
               color = StudioTextSecondary,
             )
