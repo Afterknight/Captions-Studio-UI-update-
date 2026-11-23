@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Captions Studio v-beta-0"
+rootProject.name = "Caption Studio"
 
 include(":app")

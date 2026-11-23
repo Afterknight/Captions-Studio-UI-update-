@@ -128,7 +128,7 @@ class CaptionStudioEngineTest {
   }
 
   @Test
-  fun `switching between all 8 presets preserves transcript and timings`() {
+  fun `switching between all 36 normal and kinetic presets preserves transcript and timings`() {
     val base =
       LocalCompositionEngine.generateCompositions(
         transcript = "Why do many creators add. Especially text like this.",
@@ -137,7 +137,13 @@ class CaptionStudioEngineTest {
         preset = PresetCatalog.findById("editorial"),
         analysisReport = VideoAnalysisReport(),
       )
-    assertEquals(8, PresetCatalog.presets.size)
+    assertEquals(16, PresetCatalog.normalPresets.size)
+    assertEquals(20, PresetCatalog.kineticPresets.size)
+    assertEquals(36, PresetCatalog.presets.size)
+    val legacyIds = listOf("editorial", "impact", "kinetic", "minimal", "magazine", "neon", "cinematic", "creator")
+    legacyIds.forEach { legacyId ->
+      assertTrue("Legacy preset $legacyId must exist", PresetCatalog.presets.any { it.id == legacyId })
+    }
     PresetCatalog.presets.forEach { preset ->
       val restyled =
         PresetCatalog.applyPresetToCompositions(preset, base, VideoAnalysisReport())
@@ -146,6 +152,7 @@ class CaptionStudioEngineTest {
         assertEquals(base[idx].originalText, comp.originalText)
         assertEquals(base[idx].startMs, comp.startMs)
         assertEquals(base[idx].endMs, comp.endMs)
+        assertTrue("Preset ${preset.id} must produce non-empty elements", comp.elements.isNotEmpty())
       }
     }
   }
@@ -672,5 +679,185 @@ class CaptionStudioEngineTest {
     val fixed = CompositionValidator.validateAndRepair(null, listOf(comp))
     val scaledSize = fixed.first().elements.first().fontSizeSp
     assertTrue("Expected validator to shrink oversized 14-char token below 50sp, was $scaledSize", scaledSize < 50f)
+  }
+
+  @Test
+  fun `active-word karaoke timing resolves exact word mappings and interpolates manual scripts`() {
+    val mappedComp =
+      CaptionComposition(
+        id = "c_karaoke",
+        startMs = 1000L,
+        endMs = 2500L,
+        originalText = "Watch every word",
+        wordMappings =
+          listOf(
+            WordTiming("Watch", 1000L, 1400L, isEstimated = false),
+            WordTiming("every", 1450L, 1950L, isEstimated = false),
+            WordTiming("word", 2000L, 2500L, isEstimated = false),
+          ),
+        elements = emptyList(),
+      )
+    val w0At1700 =
+      com.example.captionstudio.engine.KineticCompositionRenderer.resolveActiveWordTiming(
+        comp = mappedComp,
+        globalWordOrder = 0,
+        mappedWordIndex = 0,
+        totalWordsInElement = 3,
+        positionMs = 1700L,
+      )
+    val w1At1700 =
+      com.example.captionstudio.engine.KineticCompositionRenderer.resolveActiveWordTiming(
+        comp = mappedComp,
+        globalWordOrder = 1,
+        mappedWordIndex = 1,
+        totalWordsInElement = 3,
+        positionMs = 1700L,
+      )
+    val w2At1700 =
+      com.example.captionstudio.engine.KineticCompositionRenderer.resolveActiveWordTiming(
+        comp = mappedComp,
+        globalWordOrder = 2,
+        mappedWordIndex = 2,
+        totalWordsInElement = 3,
+        positionMs = 1700L,
+      )
+    assertTrue("First word should already be spoken at 1700ms", w0At1700.isSpokenAlready && !w0At1700.isActive)
+    assertTrue("Middle word should be active at 1700ms", w1At1700.isActive && w1At1700.progress01 in 0.45f..0.55f)
+    assertTrue("Third word should not be active yet", !w2At1700.isActive && !w2At1700.isSpokenAlready)
+
+    // Fallback proportional interpolation when wordMappings is empty
+    val unmappedComp = mappedComp.copy(wordMappings = emptyList())
+    val fallbackMid =
+      com.example.captionstudio.engine.KineticCompositionRenderer.resolveActiveWordTiming(
+        comp = unmappedComp,
+        globalWordOrder = 1,
+        mappedWordIndex = null,
+        totalWordsInElement = 3,
+        positionMs = 1750L,
+      )
+    assertTrue("Interpolated middle word should be active at midpoint 1750ms", fallbackMid.isActive)
+  }
+
+  @Test
+  fun `magnetic snap locks cleanly to center axes and platform safe zones`() {
+    val centerSnap =
+      com.example.captionstudio.ui.components.computeMagneticSnap(
+        rawX = 0.512f,
+        rawY = 0.488f,
+        safeZonePlatform = com.example.captionstudio.domain.model.SafeZonePlatform.NONE,
+      )
+    assertEquals(0.50f, centerSnap.x, 0.0001f)
+    assertEquals(0.50f, centerSnap.y, 0.0001f)
+    assertEquals(0.50f, centerSnap.snappedVerticalX)
+    assertEquals(0.50f, centerSnap.snappedHorizontalY)
+
+    val tiktokSafeSnap =
+      com.example.captionstudio.ui.components.computeMagneticSnap(
+        rawX = 0.41f,
+        rawY = 0.745f,
+        safeZonePlatform = com.example.captionstudio.domain.model.SafeZonePlatform.TIKTOK,
+      )
+    assertEquals(0.42f, tiktokSafeSnap.x, 0.0001f)
+    assertEquals(0.74f, tiktokSafeSnap.y, 0.0001f)
+
+    val freePos =
+      com.example.captionstudio.ui.components.computeMagneticSnap(
+        rawX = 0.62f,
+        rawY = 0.36f,
+        safeZonePlatform = com.example.captionstudio.domain.model.SafeZonePlatform.NONE,
+      )
+    assertEquals(0.62f, freePos.x, 0.0001f)
+    assertEquals(0.36f, freePos.y, 0.0001f)
+    assertEquals(null, freePos.snappedVerticalX)
+    assertEquals(null, freePos.snappedHorizontalY)
+  }
+
+  @Test
+  fun `visual timeline trim clamp enforces min duration and prevents neighbor overlap`() {
+    val (clampedStart, clampedEnd) =
+      com.example.captionstudio.ui.components.clampTrimRange(
+        proposedStartMs = 900L,
+        proposedEndMs = 4200L,
+        totalDurationMs = 8000L,
+        prevCompEndMs = 1500L,
+        nextCompStartMs = 3500L,
+        minDurationMs = 300L,
+      )
+    assertEquals(1500L, clampedStart)
+    assertEquals(3500L, clampedEnd)
+
+    val (minStart, minEnd) =
+      com.example.captionstudio.ui.components.clampTrimRange(
+        proposedStartMs = 2000L,
+        proposedEndMs = 2050L,
+        totalDurationMs = 8000L,
+        minDurationMs = 300L,
+      )
+    assertTrue("Clamped block must preserve at least 300ms duration", minEnd - minStart >= 300L)
+  }
+
+  @Test
+  fun `batch hook pacing template distinguishes opening 0-3s hook from body captions`() {
+    val phrases =
+      listOf(
+        listOf(WordTiming("Stop", 100L, 500L), WordTiming("scrolling", 520L, 1200L), WordTiming("now", 1220L, 1800L)),
+        listOf(WordTiming("Here", 3200L, 3600L), WordTiming("is", 3620L, 3900L), WordTiming("the", 3920L, 4200L), WordTiming("secret", 4220L, 4900L)),
+      )
+    val base =
+      LocalCompositionEngine.generateCompositionsFromPhrases(
+        phrases = phrases,
+        preset = PresetCatalog.findById("normal_classic_white"),
+        analysisReport = VideoAnalysisReport(),
+      )
+    val pacing =
+      LocalCompositionEngine.applyHookPacingTemplate(
+        compositions = base,
+        template = com.example.captionstudio.domain.model.HookPacingTemplate.VIRAL_HOOK_KARAOKE_BODY,
+        activePreset = PresetCatalog.findById("normal_classic_white"),
+        analysisReport = VideoAnalysisReport(),
+      )
+    assertEquals(1, pacing.hookCount)
+    assertEquals(1, pacing.bodyCount)
+    assertEquals(2, pacing.compositions.size)
+    // Hook (<3000ms) gets high-impact larger typography than clean body (>=3000ms)
+    val hookMaxSp = pacing.compositions[0].elements.maxOf { it.fontSizeSp }
+    val bodyMaxSp = pacing.compositions[1].elements.maxOf { it.fontSizeSp }
+    assertTrue("Hook font ($hookMaxSp) should punch larger than body ($bodyMaxSp)", hookMaxSp > bodyMaxSp)
+    assertTrue(
+      "Body caption in Viral Hook + Karaoke should enable active-word karaoke",
+      pacing.compositions[1].elements.any {
+        it.karaokeMode != com.example.captionstudio.domain.model.KaraokeHighlightMode.OFF
+      },
+    )
+
+    val reset =
+      LocalCompositionEngine.applyHookPacingTemplate(
+        compositions = pacing.compositions,
+        template = com.example.captionstudio.domain.model.HookPacingTemplate.UNIFORM_RESET,
+        activePreset = PresetCatalog.findById("normal_classic_white"),
+        analysisReport = VideoAnalysisReport(),
+      )
+    assertEquals(0, reset.hookCount)
+    assertEquals(2, reset.bodyCount)
+  }
+
+  @Test
+  fun `normal preset generates clean single-block subtitle with karaoke mode intact`() {
+    val preset = PresetCatalog.findById("normal_hormozi_pop")
+    assertEquals(com.example.captionstudio.domain.model.PresetCategory.NORMAL, preset.category)
+    val comps =
+      LocalCompositionEngine.generateCompositions(
+        transcript = "Every single word pops right on beat.",
+        wordTimings = emptyList(),
+        totalDurationMs = 3000L,
+        preset = preset,
+        analysisReport = VideoAnalysisReport(),
+      )
+    assertTrue(comps.isNotEmpty())
+    assertEquals(1, comps.first().elements.size)
+    assertEquals(
+      com.example.captionstudio.domain.model.KaraokeHighlightMode.SCALE_POP,
+      comps.first().elements.first().karaokeMode,
+    )
   }
 }

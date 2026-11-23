@@ -250,6 +250,66 @@ enum class LayerMotionEffect(
   TYPEWRITER("Typewriter", "Reveal", "Character-by-character typing"),
 }
 
+/**
+ * Millisecond-synced active-word karaoke highlight styles rendered identically in Live Preview
+ * and exported MP4 videos.
+ */
+@Serializable
+enum class KaraokeHighlightMode(
+  val label: String,
+  val summary: String,
+) {
+  OFF("Off", "Uniform phrase styling"),
+  COLOR_POP("Color Pop", "Active spoken word pops in accent color"),
+  PILL_SWEEP("Pill Sweep", "Animated highlight pill glides across each word"),
+  SCALE_POP("Scale Pop", "Elastic scale punch + color highlight per word"),
+  UNDERLINE_SWEEP("Underline", "Glowing accent bar sweeps under each word"),
+}
+
+@Serializable
+enum class PresetCategory(val label: String) {
+  NORMAL("Normal"),
+  KINETIC("Kinetic"),
+}
+
+/**
+ * Batch pacing templates that automatically apply high-impact hook typography to the
+ * opening 3 seconds (< 3000ms) and clean, retention-friendly body styling afterwards.
+ */
+@Serializable
+enum class HookPacingTemplate(
+  val id: String,
+  val title: String,
+  val subtitle: String,
+  val hookWindowMs: Long = 3000L,
+) {
+  VIRAL_HOOK_KARAOKE_BODY(
+    id = "viral_karaoke",
+    title = "Viral Hook + Karaoke",
+    subtitle = "0–3s bold impact opener, then color-pop karaoke body",
+  ),
+  BEHIND_HOOK_SUBTITLE_BODY(
+    id = "behind_subtitle",
+    title = "Behind-Subject + Clean",
+    subtitle = "0–3s behind-subject hero hook, then crisp lower subtitles",
+  ),
+  IMPACT_HOOK_PILL_BODY(
+    id = "impact_pill",
+    title = "Impact Hook + Pill",
+    subtitle = "0–3s oversized yellow hook, then pill-sweep body captions",
+  ),
+  CINEMATIC_HOOK_MINIMAL(
+    id = "cinematic_minimal",
+    title = "Cinema Opener + Minimal",
+    subtitle = "0–3s wide gold headline hook, then quiet minimal body",
+  ),
+  UNIFORM_RESET(
+    id = "uniform_reset",
+    title = "Reset Uniform",
+    subtitle = "Match all hook & body captions evenly to current preset",
+  ),
+}
+
 @Immutable
 @Serializable
 data class WordTiming(
@@ -298,6 +358,9 @@ data class CompositionElement(
   val motionEffect: LayerMotionEffect = LayerMotionEffect.NONE,
   val motionSpeed: Float = 1.0f,
   val motionIntensity: Float = 1.0f,
+  val karaokeMode: KaraokeHighlightMode = KaraokeHighlightMode.OFF,
+  val karaokeHighlightColorHex: String = StudioPalette.YELLOW,
+  val karaokePillColorHex: String? = null,
 )
 
 /**
@@ -337,6 +400,10 @@ data class ElementStylePatch(
   val motionEffect: LayerMotionEffect? = null,
   val motionSpeed: Float? = null,
   val motionIntensity: Float? = null,
+  val karaokeMode: KaraokeHighlightMode? = null,
+  val karaokeHighlightColorHex: String? = null,
+  val karaokePillColorHex: String? = null,
+  val clearKaraokePill: Boolean = false,
 )
 
 @Immutable
@@ -498,6 +565,10 @@ data class PresetDefinition(
   val preferBehindSubject: Boolean = false,
   val preferUppercase: Boolean = false,
   val isCustomCloned: Boolean = false,
+  val category: PresetCategory = PresetCategory.KINETIC,
+  val defaultKaraokeMode: KaraokeHighlightMode = KaraokeHighlightMode.OFF,
+  val karaokeHighlightColorHex: String = StudioPalette.YELLOW,
+  val karaokePillColorHex: String? = null,
 )
 
 @Immutable

@@ -1,20 +1,34 @@
 package com.example.captionstudio.engine
 
+import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.CompositionStyleVariant
 import com.example.captionstudio.domain.model.DepthLayer
+import com.example.captionstudio.domain.model.EntryAnimationType
+import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.FontRoleOverrides
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.HookPacingTemplate
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
+import com.example.captionstudio.domain.model.LayerMotionEffect
+import com.example.captionstudio.domain.model.PresetCategory
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 import com.example.captionstudio.domain.model.WordTiming
+import com.example.captionstudio.presets.PresetCatalog
 import java.util.UUID
 import kotlin.math.max
+
+data class HookPacingResult(
+  val compositions: List<CaptionComposition>,
+  val hookCount: Int,
+  val bodyCount: Int,
+)
 
 object LocalCompositionEngine {
 
@@ -159,6 +173,55 @@ object LocalCompositionEngine {
         else globalHasSubject
       val isSplitActive = shot?.isSplitScreen ?: analysisReport.isSplitScreenDetected
 
+      // Branch cleanly for everyday NORMAL caption presets (uniform 1–2 line subtitle / karaoke block)
+      if (preset.category == PresetCategory.NORMAL) {
+        if (shotIndex != lastShotKey) {
+          lastShotKey = shotIndex
+          anchoredShotRegion = null
+        }
+        val (region, updatedShotAnchor) =
+          chooseFrameAwareRegion(
+            styleVariant = CompositionStyleVariant.STANDARD,
+            shot = shot,
+            currentShotAnchor = anchoredShotRegion,
+            rankedRegions = listOf(SafeRegion.LOWER_CENTER, SafeRegion.UPPER_CENTER) + regions,
+            analysisReport = analysisReport,
+            shotHasSubject = shotHasSubject,
+          )
+        anchoredShotRegion = updatedShotAnchor
+        val normalRegion =
+          if (region == SafeRegion.UPPER_CENTER || region == SafeRegion.CENTER) region
+          else SafeRegion.LOWER_CENTER
+        val normalEl =
+          composeNormalCaptionElement(
+            words = phraseWords,
+            preset = preset,
+            supportingFont = supportingFont,
+            heavyFont = heavyFont,
+          )
+        val zoneMetrics = shot?.zoneMetrics?.get(normalRegion)
+        val guarded = applyAutoReadabilityGuard(listOf(normalEl), zoneMetrics)
+        return@mapIndexed CaptionComposition(
+          id = UUID.randomUUID().toString(),
+          startMs = startMs,
+          endMs = endMs,
+          originalText = rawSentence,
+          region = normalRegion,
+          anchorXFraction = normalRegion.defaultAnchorX,
+          anchorYFraction = normalRegion.defaultAnchorY,
+          entryAnimation = preset.defaultEntryAnim,
+          exitAnimation = preset.defaultExitAnim,
+          easing = preset.defaultEasing,
+          entryDurationMs = preset.entryDurationMs,
+          exitDurationMs = preset.exitDurationMs,
+          elements = guarded,
+          wordMappings = phraseWords,
+          depthLayer = DepthLayer.IN_FRONT,
+          styleVariant = CompositionStyleVariant.STANDARD,
+          backgroundMaskEnabled = preset.preferBehindSubject,
+        )
+      }
+
       val stopCount = phraseWords.count { cleanToken(it.word) in stopWords }
       val isWhisperBeat =
         phraseWords.size in 2..3 &&
@@ -201,7 +264,8 @@ object LocalCompositionEngine {
 
       val useBehindSubject =
         shotHasSubject &&
-          (styleVariant == CompositionStyleVariant.HERO_STACK ||
+          (preset.preferBehindSubject ||
+            styleVariant == CompositionStyleVariant.HERO_STACK ||
             (styleVariant == CompositionStyleVariant.GLOW_BANNER && region == SafeRegion.UPPER_CENTER))
 
       val alignment =
@@ -255,6 +319,16 @@ object LocalCompositionEngine {
               alignment = alignment,
               behindSubject = useBehindSubject,
             )
+        }.map { el ->
+          el.copy(
+            strokeWidthFactor = if (preset.strokeWidthFactor > 0f) preset.strokeWidthFactor else el.strokeWidthFactor,
+            strokeColorHex = if (preset.strokeWidthFactor > 0f) preset.strokeColorHex else el.strokeColorHex,
+            backgroundColorHex = preset.backgroundPillColorHex ?: el.backgroundColorHex,
+            backgroundAlpha = if (preset.backgroundPillColorHex != null) preset.backgroundPillAlpha else el.backgroundAlpha,
+            karaokeMode = preset.defaultKaraokeMode,
+            karaokeHighlightColorHex = preset.karaokeHighlightColorHex,
+            karaokePillColorHex = preset.karaokePillColorHex,
+          )
         }
 
       // Auto-readability contrast guard based on the actual background brightness/clutter behind this zone
@@ -281,6 +355,215 @@ object LocalCompositionEngine {
         backgroundMaskEnabled = useBehindSubject,
       )
     }
+  }
+
+  /**
+   * Builds a clean, uniform 1–2 line everyday subtitle / karaoke element for [PresetCategory.NORMAL].
+   */
+  private fun composeNormalCaptionElement(
+    words: List<WordTiming>,
+    preset: PresetDefinition,
+    supportingFont: String,
+    heavyFont: String,
+  ): CompositionElement {
+    val phraseText = words.joinToString(" ") { it.word }.trim()
+    val fontId = if (preset.preferUppercase) heavyFont else supportingFont
+    val weight = if (preset.preferUppercase || preset.defaultKaraokeMode != KaraokeHighlightMode.OFF) 800 else 600
+    val baseSize = (22.5f * preset.dominantScaleMultiplier).coerceIn(17f, 34f)
+    return CompositionElement(
+      id = UUID.randomUUID().toString(),
+      text = phraseText,
+      role = FontRole.SUPPORTING,
+      hierarchyLevel = HierarchyLevel.SUPPORTING,
+      fontFamilyId = fontId,
+      fontWeight = weight,
+      isItalic = false,
+      fontSizeSp = baseSize,
+      colorHex = preset.primaryColorHex,
+      alignment = TextAlignment.CENTER,
+      uppercase = preset.preferUppercase,
+      wordIndices = words.indices.toList(),
+      inlineRowGroup = 0,
+      strokeWidthFactor = preset.strokeWidthFactor,
+      strokeColorHex = preset.strokeColorHex,
+      backgroundColorHex = preset.backgroundPillColorHex,
+      backgroundAlpha = preset.backgroundPillAlpha,
+      backgroundCornerRadiusDp = 12f,
+      shadowEnabled = true,
+      shadowIntensity = preset.shadowRadiusFactor.coerceIn(0.6f, 1.5f),
+      depthLayer = DepthLayer.IN_FRONT,
+      karaokeMode = preset.defaultKaraokeMode,
+      karaokeHighlightColorHex = preset.karaokeHighlightColorHex,
+      karaokePillColorHex = preset.karaokePillColorHex,
+    )
+  }
+
+  fun buildNormalElementForComposition(
+    comp: CaptionComposition,
+    preset: PresetDefinition,
+    fontOverrides: FontRoleOverrides = FontRoleOverrides(),
+  ): CompositionElement {
+    val supportingFont = fontOverrides.supportingFontId ?: preset.supportingFontId
+    val heavyFont = fontOverrides.heavyFontId ?: preset.heavyFontId
+    val words =
+      if (comp.wordMappings.isNotEmpty()) {
+        comp.wordMappings
+      } else {
+        buildProvisionalWordTimings(
+          comp.originalText.ifBlank { comp.elements.joinToString(" ") { it.text } },
+          max(400L, comp.endMs - comp.startMs),
+        ).map { it.copy(startMs = it.startMs + comp.startMs, endMs = it.endMs + comp.startMs) }
+      }
+    return composeNormalCaptionElement(words, preset, supportingFont, heavyFont)
+  }
+
+  fun buildKineticElementsForComposition(
+    comp: CaptionComposition,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    analysisReport: VideoAnalysisReport,
+    fontOverrides: FontRoleOverrides = FontRoleOverrides(),
+  ): List<CompositionElement> {
+    val heavyFont = fontOverrides.heavyFontId ?: preset.heavyFontId
+    val supportingFont = fontOverrides.supportingFontId ?: preset.supportingFontId
+    val expressiveFont = fontOverrides.expressiveFontId ?: preset.expressiveFontId
+    val words =
+      if (comp.wordMappings.isNotEmpty()) {
+        comp.wordMappings
+      } else {
+        buildProvisionalWordTimings(
+          comp.originalText.ifBlank { comp.elements.joinToString(" ") { it.text } },
+          max(400L, comp.endMs - comp.startMs),
+        ).map { it.copy(startMs = it.startMs + comp.startMs, endMs = it.endMs + comp.startMs) }
+      }
+    if (words.isEmpty()) return comp.elements
+    val hasSubject =
+      preset.preferBehindSubject ||
+        analysisReport.subjectCoverageFraction > 0.08f ||
+        analysisReport.faceRegions.isNotEmpty()
+    return composeHeroStackElements(
+      words = words,
+      phraseIndex = phraseIndex,
+      preset = preset,
+      heavyFont = heavyFont,
+      supportingFont = supportingFont,
+      expressiveFont = expressiveFont,
+      alignment = TextAlignment.CENTER,
+      behindSubject = hasSubject,
+    ).map { el ->
+      el.copy(
+        strokeWidthFactor = preset.strokeWidthFactor,
+        strokeColorHex = preset.strokeColorHex,
+        backgroundColorHex = preset.backgroundPillColorHex,
+        backgroundAlpha = preset.backgroundPillAlpha,
+        karaokeMode = preset.defaultKaraokeMode,
+        karaokeHighlightColorHex = preset.karaokeHighlightColorHex,
+        karaokePillColorHex = preset.karaokePillColorHex,
+      )
+    }
+  }
+
+  /**
+   * Batch Hook & B-Roll Pacing Templates:
+   * Automatically styles opening hook captions (startMs < 3000ms, or the opening caption if all
+   * start later) with high-impact typography punch, while pacing subsequent body captions cleanly
+   * for effortless B-roll and talking-head readability.
+   */
+  fun applyHookPacingTemplate(
+    compositions: List<CaptionComposition>,
+    template: HookPacingTemplate,
+    activePreset: PresetDefinition,
+    analysisReport: VideoAnalysisReport,
+    fontOverrides: FontRoleOverrides = FontRoleOverrides(),
+  ): HookPacingResult {
+    if (compositions.isEmpty()) return HookPacingResult(emptyList(), 0, 0)
+    if (template == HookPacingTemplate.UNIFORM_RESET) {
+      val uniform =
+        PresetCatalog.applyPresetToCompositions(
+          preset = activePreset,
+          compositions = compositions,
+          analysisReport = analysisReport,
+          fontOverrides = fontOverrides,
+        )
+      return HookPacingResult(uniform, hookCount = 0, bodyCount = uniform.size)
+    }
+
+    val hookPreset =
+      when (template) {
+        HookPacingTemplate.VIRAL_HOOK_KARAOKE_BODY -> PresetCatalog.findById("impact")
+        HookPacingTemplate.BEHIND_HOOK_SUBTITLE_BODY -> PresetCatalog.findById("kinetic_street_poster")
+        HookPacingTemplate.IMPACT_HOOK_PILL_BODY -> PresetCatalog.findById("kinetic_hype_drop")
+        HookPacingTemplate.CINEMATIC_HOOK_MINIMAL -> PresetCatalog.findById("kinetic_vogue_luxury")
+        HookPacingTemplate.UNIFORM_RESET -> activePreset
+      }
+    val bodyPreset =
+      when (template) {
+        HookPacingTemplate.VIRAL_HOOK_KARAOKE_BODY -> PresetCatalog.findById("normal_tiktok_native")
+        HookPacingTemplate.BEHIND_HOOK_SUBTITLE_BODY -> PresetCatalog.findById("normal_classic_white")
+        HookPacingTemplate.IMPACT_HOOK_PILL_BODY -> PresetCatalog.findById("normal_pill_sweep")
+        HookPacingTemplate.CINEMATIC_HOOK_MINIMAL -> PresetCatalog.findById("normal_netflix_cinema")
+        HookPacingTemplate.UNIFORM_RESET -> activePreset
+      }
+
+    val hasAnyUnderWindow = compositions.any { it.startMs < template.hookWindowMs }
+    var hookCount = 0
+    var bodyCount = 0
+
+    val result =
+      compositions.mapIndexed { idx, comp ->
+        val isHook = if (hasAnyUnderWindow) comp.startMs < template.hookWindowMs else idx == 0
+        if (isHook) {
+          hookCount++
+          val hookStyled =
+            PresetCatalog.applyPresetToCompositions(
+                preset = hookPreset,
+                compositions = listOf(comp),
+                analysisReport = analysisReport,
+                fontOverrides = fontOverrides,
+              )
+              .first()
+          val enableBehind =
+            template == HookPacingTemplate.BEHIND_HOOK_SUBTITLE_BODY ||
+              (template == HookPacingTemplate.VIRAL_HOOK_KARAOKE_BODY &&
+                analysisReport.subjectCoverageFraction > 0.08f)
+          val punchedEls =
+            hookStyled.elements.map { el ->
+              val isDom = el.hierarchyLevel == HierarchyLevel.DOMINANT
+              el.copy(
+                fontSizeSp = (el.fontSizeSp * if (isDom) 1.12f else 1.06f).coerceIn(16f, 70f),
+                motionEffect =
+                  if (isDom && template != HookPacingTemplate.CINEMATIC_HOOK_MINIMAL) {
+                    LayerMotionEffect.POP_IN
+                  } else {
+                    el.motionEffect
+                  },
+                depthLayer = if (enableBehind && isDom) DepthLayer.BEHIND_SUBJECT else el.depthLayer,
+              )
+            }
+          hookStyled.copy(
+            entryAnimation =
+              if (template == HookPacingTemplate.CINEMATIC_HOOK_MINIMAL) EntryAnimationType.SLIDE_UP
+              else EntryAnimationType.FADE_POP,
+            exitAnimation = ExitAnimationType.SCALE_OUT,
+            easing = AnimationEasingType.SPRING_OVERSHOOT,
+            entryDurationMs = if (template == HookPacingTemplate.CINEMATIC_HOOK_MINIMAL) 190 else 115,
+            depthLayer = if (enableBehind) DepthLayer.BEHIND_SUBJECT else hookStyled.depthLayer,
+            backgroundMaskEnabled = enableBehind || hookStyled.backgroundMaskEnabled,
+            elements = punchedEls,
+          )
+        } else {
+          bodyCount++
+          PresetCatalog.applyPresetToCompositions(
+              preset = bodyPreset,
+              compositions = listOf(comp),
+              analysisReport = analysisReport,
+              fontOverrides = fontOverrides,
+            )
+            .first()
+        }
+      }
+
+    return HookPacingResult(result, hookCount = hookCount, bodyCount = bodyCount)
   }
 
   private fun findShotIndexForTime(timeMs: Long, report: VideoAnalysisReport): Int {

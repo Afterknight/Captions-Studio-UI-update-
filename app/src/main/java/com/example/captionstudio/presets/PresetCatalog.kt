@@ -16,7 +16,7 @@ object PresetCatalog {
 
   const val DEFAULT_PRESET_ID = "editorial"
 
-  val presets: List<PresetDefinition> =
+  val classicKineticPresets: List<PresetDefinition> =
     listOf(
       PresetDefinition(
         id = "editorial",
@@ -246,6 +246,13 @@ object PresetCatalog {
       ),
     )
 
+  val kineticPresets: List<PresetDefinition> =
+    classicKineticPresets + ExpandedPresets.expandedKineticPresets
+
+  val normalPresets: List<PresetDefinition> = ExpandedPresets.normalPresets
+
+  val presets: List<PresetDefinition> = kineticPresets + normalPresets
+
   @Volatile
   private var customPresetsList: List<PresetDefinition> = emptyList()
 
@@ -264,7 +271,9 @@ object PresetCatalog {
   }
 
   /**
-   * Re-styles existing compositions when switching presets without losing transcript edits, timing, or depth layers.
+   * Re-styles existing compositions when switching presets without losing transcript edits,
+   * word timings, or custom placements. Cleanly adapts between Normal uniform subtitles and
+   * multi-tier Kinetic typography!
    */
   fun applyPresetToCompositions(
     preset: PresetDefinition,
@@ -284,10 +293,72 @@ object PresetCatalog {
         ?: preset.preferredRegions.firstOrNull()
         ?: SafeRegion.LOWER_CENTER
 
-    return compositions.map { comp ->
-      // Preserve frame-aware shot placement and user custom placements when switching presets
-      val region = if (comp.region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else comp.region
+    return compositions.mapIndexed { idx, comp ->
       val preserveCoords = true
+      val effectiveRegion = if (comp.region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else comp.region
+
+      // Branch A: Switching to a NORMAL everyday caption preset -> clean single-block uniform caption + karaoke
+      if (preset.category == com.example.captionstudio.domain.model.PresetCategory.NORMAL) {
+        val normalEl =
+          com.example.captionstudio.engine.LocalCompositionEngine.buildNormalElementForComposition(
+            comp = comp,
+            preset = preset,
+            fontOverrides = fontOverrides,
+          )
+        val anchorRegion =
+          if (comp.region == SafeRegion.CUSTOM) SafeRegion.CUSTOM
+          else if (comp.region == SafeRegion.UPPER_CENTER) SafeRegion.UPPER_CENTER
+          else SafeRegion.LOWER_CENTER
+        return@mapIndexed comp.copy(
+          region = anchorRegion,
+          anchorXFraction = if (comp.region == SafeRegion.CUSTOM) comp.anchorXFraction else anchorRegion.defaultAnchorX,
+          anchorYFraction = if (comp.region == SafeRegion.CUSTOM) comp.anchorYFraction else anchorRegion.defaultAnchorY,
+          entryAnimation = preset.defaultEntryAnim,
+          exitAnimation = preset.defaultExitAnim,
+          easing = preset.defaultEasing,
+          entryDurationMs = preset.entryDurationMs,
+          exitDurationMs = preset.exitDurationMs,
+          depthLayer = com.example.captionstudio.domain.model.DepthLayer.IN_FRONT,
+          styleVariant = com.example.captionstudio.domain.model.CompositionStyleVariant.STANDARD,
+          backgroundMaskEnabled = preset.preferBehindSubject,
+          elements = listOf(normalEl),
+        )
+      }
+
+      // Branch B: Switching to a KINETIC preset from a single-element Normal composition -> expand back to kinetic tiers
+      val wordCount = comp.originalText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+      if (comp.styleVariant == com.example.captionstudio.domain.model.CompositionStyleVariant.STANDARD &&
+          comp.elements.size == 1 &&
+          wordCount >= 2
+      ) {
+        val rebuiltElements =
+          com.example.captionstudio.engine.LocalCompositionEngine.buildKineticElementsForComposition(
+            comp = comp,
+            phraseIndex = idx,
+            preset = preset,
+            analysisReport = analysisReport,
+            fontOverrides = fontOverrides,
+          )
+        val hasBehind = rebuiltElements.any { it.depthLayer == com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT }
+        return@mapIndexed comp.copy(
+          region = effectiveRegion,
+          anchorXFraction = if (preserveCoords) comp.anchorXFraction else fallbackRegion.defaultAnchorX,
+          anchorYFraction = if (preserveCoords) comp.anchorYFraction else fallbackRegion.defaultAnchorY,
+          entryAnimation = preset.defaultEntryAnim,
+          exitAnimation = preset.defaultExitAnim,
+          easing = preset.defaultEasing,
+          entryDurationMs = preset.entryDurationMs,
+          exitDurationMs = preset.exitDurationMs,
+          depthLayer =
+            if (hasBehind || preset.preferBehindSubject) com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT
+            else com.example.captionstudio.domain.model.DepthLayer.IN_FRONT,
+          styleVariant = com.example.captionstudio.domain.model.CompositionStyleVariant.HERO_STACK,
+          backgroundMaskEnabled = hasBehind || preset.preferBehindSubject,
+          elements = rebuiltElements,
+        )
+      }
+
+      // Branch C: Kinetic -> Kinetic restyle preserving manual edits & layer hierarchy
       val baseElements =
         comp.elements.map { el ->
           val roleFont =
@@ -331,24 +402,29 @@ object PresetCatalog {
             colorHex = roleColor,
             fontSizeSp = baseSize.coerceIn(15f, 74f),
             uppercase = if (preset.preferUppercase) true else el.uppercase,
-            strokeWidthFactor =
-              if (preset.strokeWidthFactor > 0f) preset.strokeWidthFactor else el.strokeWidthFactor,
-            strokeColorHex =
-              if (preset.strokeWidthFactor > 0f) preset.strokeColorHex else el.strokeColorHex,
-            backgroundColorHex = preset.backgroundPillColorHex ?: el.backgroundColorHex,
-            backgroundAlpha =
-              if (preset.backgroundPillColorHex != null) preset.backgroundPillAlpha else el.backgroundAlpha,
+            strokeWidthFactor = preset.strokeWidthFactor,
+            strokeColorHex = preset.strokeColorHex,
+            backgroundColorHex = preset.backgroundPillColorHex,
+            backgroundAlpha = preset.backgroundPillAlpha,
             depthLayer = useBehindSubject,
             glowColorHex =
-              if (roleColor == StudioPalette.YELLOW || roleColor == StudioPalette.ORANGE) roleColor
-              else null,
+              if (roleColor == StudioPalette.YELLOW ||
+                  roleColor == StudioPalette.ORANGE ||
+                  roleColor == StudioPalette.CYAN
+              ) {
+                roleColor
+              } else {
+                null
+              },
             letterSpacingEm =
               if (preset.id == "cinematic" && el.role == FontRole.HEAVY) 0.08f
               else if (el.role == FontRole.HEAVY) -0.02f
               else 0f,
+            karaokeMode = preset.defaultKaraokeMode,
+            karaokeHighlightColorHex = preset.karaokeHighlightColorHex,
+            karaokePillColorHex = preset.karaokePillColorHex,
           )
         }
-      val effectiveRegion = if (region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else region
       comp.copy(
         region = effectiveRegion,
         anchorXFraction = if (preserveCoords) comp.anchorXFraction else fallbackRegion.defaultAnchorX,

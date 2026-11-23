@@ -81,6 +81,7 @@ import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.ElementStylePatch
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.StudioPalette
@@ -129,7 +130,10 @@ fun TypographyInspectorDeck(
   var previewReplayNonce by remember { mutableIntStateOf(0) }
 
   val hasEffectsActive =
-    activeEl.strokeWidthFactor > 0.05f || !activeEl.glowColorHex.isNullOrBlank() || activeEl.shadowEnabled
+    activeEl.karaokeMode != KaraokeHighlightMode.OFF ||
+      activeEl.strokeWidthFactor > 0.05f ||
+      !activeEl.glowColorHex.isNullOrBlank() ||
+      activeEl.shadowEnabled
   val hasMotionActive = activeEl.motionEffect != LayerMotionEffect.NONE
 
   val tabs =
@@ -615,8 +619,121 @@ private fun TypographyEffectsTab(
 ) {
   val hasStroke = activeEl.strokeWidthFactor > 0.05f
   val hasGlow = !activeEl.glowColorHex.isNullOrBlank()
+  val hasKaraoke = activeEl.karaokeMode != KaraokeHighlightMode.OFF
+  val chipColors =
+    FilterChipDefaults.filterChipColors(
+      selectedContainerColor = StudioCoralContainer,
+      selectedLabelColor = StudioCoralLight,
+      containerColor = StudioObsidian,
+      labelColor = StudioTextSecondary,
+    )
 
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // 0. Active-Word Karaoke Highlighting
+    Column(
+      modifier =
+        Modifier.fillMaxWidth()
+          .clip(RoundedCornerShape(16.dp))
+          .background(StudioElevated)
+          .border(
+            width = 1.dp,
+            color = if (hasKaraoke) StudioCoral.copy(alpha = 0.55f) else StudioHairline,
+            shape = RoundedCornerShape(16.dp),
+          )
+          .padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Column {
+        Text("Active-Word Karaoke", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
+        Text(
+          text = activeEl.karaokeMode.summary,
+          style = MaterialTheme.typography.bodySmall,
+          color = StudioTextSecondary,
+        )
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        KaraokeHighlightMode.entries.forEach { mode ->
+          val isChosen = activeEl.karaokeMode == mode
+          FilterChip(
+            selected = isChosen,
+            onClick = {
+              val defaultPill =
+                when (mode) {
+                  KaraokeHighlightMode.PILL_SWEEP -> activeEl.karaokePillColorHex ?: "#FF5A36"
+                  KaraokeHighlightMode.UNDERLINE_SWEEP ->
+                    activeEl.karaokePillColorHex ?: activeEl.karaokeHighlightColorHex
+                  else -> null
+                }
+              onPatchStyle(
+                ElementStylePatch(
+                  karaokeMode = mode,
+                  karaokePillColorHex = defaultPill,
+                ),
+                true,
+              )
+            },
+            shape = CircleShape,
+            colors = chipColors,
+            border =
+              FilterChipDefaults.filterChipBorder(
+                enabled = true,
+                selected = isChosen,
+                borderColor = StudioHairline,
+                selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
+              ),
+            label = {
+              Text(
+                mode.label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                softWrap = false,
+              )
+            },
+            modifier = Modifier.testTag("typo_karaoke_${mode.name.lowercase()}"),
+          )
+        }
+      }
+      AnimatedVisibility(
+        visible = hasKaraoke,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+      ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text("Active Word Color", style = MaterialTheme.typography.labelSmall, color = StudioTextSecondary)
+          StudioColorSwatchSelector(
+            selectedHex = activeEl.karaokeHighlightColorHex,
+            swatches = StudioPalette.textSwatches,
+            onColorChange = { hex, commit ->
+              onPatchStyle(ElementStylePatch(karaokeHighlightColorHex = hex), commit)
+            },
+            swatchTagPrefix = "karaoke_word_color",
+          )
+          if (activeEl.karaokeMode == KaraokeHighlightMode.PILL_SWEEP ||
+              activeEl.karaokeMode == KaraokeHighlightMode.UNDERLINE_SWEEP
+          ) {
+            Text(
+              text =
+                if (activeEl.karaokeMode == KaraokeHighlightMode.PILL_SWEEP) "Highlight Pill Color"
+                else "Underline Bar Color",
+              style = MaterialTheme.typography.labelSmall,
+              color = StudioTextSecondary,
+            )
+            StudioColorSwatchSelector(
+              selectedHex = activeEl.karaokePillColorHex ?: activeEl.karaokeHighlightColorHex,
+              swatches = StudioPalette.textSwatches,
+              onColorChange = { hex, commit ->
+                onPatchStyle(ElementStylePatch(karaokePillColorHex = hex), commit)
+              },
+              swatchTagPrefix = "karaoke_pill_color",
+            )
+          }
+        }
+      }
+    }
+
     // 1. Outline / Stroke
     EffectSectionCard(
       title = "Text Outline",

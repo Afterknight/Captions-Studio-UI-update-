@@ -18,6 +18,7 @@ import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.EntryAnimationType
 import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.TextAlignment
 import com.example.captionstudio.typography.FontRegistry
@@ -47,7 +48,9 @@ class KineticCompositionRenderer(private val context: Context) {
   private data class MeasuredWordSpan(
     val text: String,
     val startXInLine: Float,
+    val widthPx: Float,
     val wordIndexInComp: Int?,
+    val globalWordOrder: Int,
   )
 
   private data class MeasuredLine(
@@ -67,6 +70,9 @@ class KineticCompositionRenderer(private val context: Context) {
     val glowPaint: TextPaint?,
     val strokePaint: TextPaint?,
     val backgroundPaint: Paint?,
+    val karaokeHighlightPaint: TextPaint?,
+    val karaokePillPaint: Paint?,
+    val totalWordsInElement: Int,
     val lines: List<MeasuredLine>,
     val blockWidthPx: Float,
     val blockHeightPx: Float,
@@ -98,6 +104,7 @@ class KineticCompositionRenderer(private val context: Context) {
   private val tempSrcRect = Rect()
   private val tempDstRect = RectF()
   private val tempBgRect = RectF()
+  private val tempKaraokeRect = RectF()
   private val boxPaint =
     Paint(Paint.ANTI_ALIAS_FLAG).apply {
       style = Paint.Style.STROKE
@@ -543,8 +550,10 @@ class KineticCompositionRenderer(private val context: Context) {
       }
     var charCursor = 0
 
+    val isKaraoke = el.karaokeMode != KaraokeHighlightMode.OFF && !isTypewriter
     val canDoWordReveal =
       !isTypewriter &&
+        !isKaraoke &&
         el.hierarchyLevel != HierarchyLevel.DOMINANT &&
         el.wordIndices.size > 1 &&
         active.wordMappings.isNotEmpty()
@@ -576,6 +585,149 @@ class KineticCompositionRenderer(private val context: Context) {
             glowIntensity = el.glowIntensity,
             alphaByte = baseAlphaByte,
           )
+        }
+      } else if (isKaraoke && line.words.isNotEmpty()) {
+        val highlightPaint = measured.karaokeHighlightPaint ?: measured.paint
+        val pillPaint = measured.karaokePillPaint
+        for (wSpan in line.words) {
+          val waveOffsetY =
+            if (isWave) {
+              val off = sin(motionElapsedSec * 5.8f - waveWordSeq * 0.9f) * 7.5f * baseScale * mIntensity
+              waveWordSeq++
+              off
+            } else {
+              0f
+            }
+          val kState =
+            resolveActiveWordTiming(
+              comp = active,
+              globalWordOrder = wSpan.globalWordOrder,
+              mappedWordIndex = wSpan.wordIndexInComp,
+              totalWordsInElement = measured.totalWordsInElement,
+              positionMs = positionMs,
+            )
+          val wx = lineStartX + wSpan.startXInLine
+          val wy = baselineY + waveOffsetY
+
+          if (kState.isActive) {
+            when (el.karaokeMode) {
+              KaraokeHighlightMode.COLOR_POP -> {
+                val popScale = 1f + sin(kState.progress01 * Math.PI).toFloat() * 0.08f
+                val cx = wx + wSpan.widthPx / 2f
+                val cy = wy + (line.ascentPx + line.descentPx) / 2f
+                canvas.save()
+                canvas.scale(popScale, popScale, cx, cy)
+                drawTextToken(
+                  canvas = canvas,
+                  text = wSpan.text,
+                  x = wx,
+                  y = wy,
+                  paint = highlightPaint,
+                  glowPaint = measured.glowPaint,
+                  strokePaint = measured.strokePaint,
+                  glowIntensity = el.glowIntensity,
+                  alphaByte = baseAlphaByte,
+                )
+                canvas.restore()
+              }
+              KaraokeHighlightMode.PILL_SWEEP -> {
+                if (pillPaint != null) {
+                  val padX = 6.5f * baseScale
+                  val padY = 3.2f * baseScale
+                  val radius = 7.5f * baseScale
+                  pillPaint.alpha = (baseAlphaByte * 0.92f).toInt().coerceIn(0, 255)
+                  tempKaraokeRect.set(
+                    wx - padX,
+                    wy + line.ascentPx - padY,
+                    wx + wSpan.widthPx + padX,
+                    wy + line.descentPx + padY,
+                  )
+                  canvas.drawRoundRect(tempKaraokeRect, radius, radius, pillPaint)
+                }
+                val popScale = 1f + sin(kState.progress01 * Math.PI).toFloat() * 0.05f
+                val cx = wx + wSpan.widthPx / 2f
+                val cy = wy + (line.ascentPx + line.descentPx) / 2f
+                canvas.save()
+                canvas.scale(popScale, popScale, cx, cy)
+                drawTextToken(
+                  canvas = canvas,
+                  text = wSpan.text,
+                  x = wx,
+                  y = wy,
+                  paint = highlightPaint,
+                  glowPaint = null,
+                  strokePaint = measured.strokePaint,
+                  glowIntensity = el.glowIntensity,
+                  alphaByte = baseAlphaByte,
+                )
+                canvas.restore()
+              }
+              KaraokeHighlightMode.SCALE_POP -> {
+                val springCurve = sin(kState.progress01 * Math.PI).toFloat()
+                val popScale = 1f + springCurve * 0.20f
+                val liftY = -springCurve * 3.0f * baseScale
+                val cx = wx + wSpan.widthPx / 2f
+                val cy = wy + (line.ascentPx + line.descentPx) / 2f
+                canvas.save()
+                canvas.translate(0f, liftY)
+                canvas.scale(popScale, popScale, cx, cy)
+                drawTextToken(
+                  canvas = canvas,
+                  text = wSpan.text,
+                  x = wx,
+                  y = wy,
+                  paint = highlightPaint,
+                  glowPaint = measured.glowPaint,
+                  strokePaint = measured.strokePaint,
+                  glowIntensity = el.glowIntensity,
+                  alphaByte = baseAlphaByte,
+                )
+                canvas.restore()
+              }
+              KaraokeHighlightMode.UNDERLINE_SWEEP -> {
+                if (pillPaint != null) {
+                  val barH = max(2.6f, 3.2f * baseScale)
+                  val sweepFrac = (0.28f + 0.72f * kState.progress01).coerceIn(0.28f, 1f)
+                  val barTop = wy + line.descentPx * 0.45f
+                  pillPaint.alpha = baseAlphaByte
+                  tempKaraokeRect.set(
+                    wx,
+                    barTop,
+                    wx + wSpan.widthPx * sweepFrac,
+                    barTop + barH,
+                  )
+                  canvas.drawRoundRect(tempKaraokeRect, barH / 2f, barH / 2f, pillPaint)
+                }
+                drawTextToken(
+                  canvas = canvas,
+                  text = wSpan.text,
+                  x = wx,
+                  y = wy,
+                  paint = highlightPaint,
+                  glowPaint = measured.glowPaint,
+                  strokePaint = measured.strokePaint,
+                  glowIntensity = el.glowIntensity,
+                  alphaByte = baseAlphaByte,
+                )
+              }
+              KaraokeHighlightMode.OFF -> Unit
+            }
+          } else {
+            val inactiveAlpha =
+              if (kState.isSpokenAlready) baseAlphaByte
+              else (baseAlphaByte * 0.84f).toInt().coerceIn(0, 255)
+            drawTextToken(
+              canvas = canvas,
+              text = wSpan.text,
+              x = wx,
+              y = wy,
+              paint = measured.paint,
+              glowPaint = measured.glowPaint,
+              strokePaint = measured.strokePaint,
+              glowIntensity = el.glowIntensity,
+              alphaByte = inactiveAlpha,
+            )
+          }
         }
       } else if (isWave && line.words.isNotEmpty()) {
         for (wSpan in line.words) {
@@ -694,7 +846,8 @@ class KineticCompositionRenderer(private val context: Context) {
           append(':').append(el.strokeWidthFactor).append(':').append(el.strokeColorHex)
           append(':').append(el.shadowEnabled).append(':').append(el.shadowIntensity).append(':').append(el.shadowColorHex)
           append(':').append(el.backgroundColorHex).append(':').append(el.backgroundAlpha).append(':').append(el.backgroundCornerRadiusDp)
-          append(':').append(el.depthLayer).append(';')
+          append(':').append(el.depthLayer)
+          append(':').append(el.karaokeMode).append(':').append(el.karaokeHighlightColorHex).append(':').append(el.karaokePillColorHex).append(';')
         }
       }
     layoutCache[sig]?.let { cached ->
@@ -715,6 +868,8 @@ class KineticCompositionRenderer(private val context: Context) {
       val glow: TextPaint?,
       val stroke: TextPaint?,
       val background: Paint?,
+      val karaokeHighlight: TextPaint?,
+      val karaokePill: Paint?,
       val lineSpacingFactor: Float,
     )
 
@@ -808,6 +963,27 @@ class KineticCompositionRenderer(private val context: Context) {
             }
           }
 
+        val karaokeHighlightPaint =
+          if (el.karaokeMode != KaraokeHighlightMode.OFF) {
+            TextPaint(paint).apply {
+              color = parseSafeColor(el.karaokeHighlightColorHex)
+            }
+          } else {
+            null
+          }
+
+        val karaokePillPaint =
+          if (el.karaokeMode == KaraokeHighlightMode.PILL_SWEEP ||
+              el.karaokeMode == KaraokeHighlightMode.UNDERLINE_SWEEP
+          ) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+              style = Paint.Style.FILL
+              color = parseSafeColor(el.karaokePillColorHex ?: el.karaokeHighlightColorHex)
+            }
+          } else {
+            null
+          }
+
         val wrappedLines = wrapLines(textStr, paint, maxLineWidthPx)
         val fm = paint.fontMetrics
         var globalWordOffset = 0
@@ -819,8 +995,17 @@ class KineticCompositionRenderer(private val context: Context) {
             val spaceW = paint.measureText(" ")
             tokens.forEachIndexed { tIdx, tok ->
               val mappedIdx = el.wordIndices.getOrNull(globalWordOffset)
-              wordSpans.add(MeasuredWordSpan(tok, xAcc, mappedIdx))
-              xAcc += paint.measureText(tok) + if (tIdx < tokens.lastIndex) spaceW else 0f
+              val tokW = paint.measureText(tok)
+              wordSpans.add(
+                MeasuredWordSpan(
+                  text = tok,
+                  startXInLine = xAcc,
+                  widthPx = tokW,
+                  wordIndexInComp = mappedIdx,
+                  globalWordOrder = globalWordOffset,
+                )
+              )
+              xAcc += tokW + if (tIdx < tokens.lastIndex) spaceW else 0f
               globalWordOffset++
             }
             MeasuredLine(
@@ -836,7 +1021,15 @@ class KineticCompositionRenderer(private val context: Context) {
           measuredLines.sumOf { (it.heightPx * lineSpacingFactor).toDouble() }.toFloat().coerceAtLeast(1f)
         Triple(
           el,
-          PaintBundle(paint, glowPaint, strokePaint, bgPaint, lineSpacingFactor),
+          PaintBundle(
+            fill = paint,
+            glow = glowPaint,
+            stroke = strokePaint,
+            background = bgPaint,
+            karaokeHighlight = karaokeHighlightPaint,
+            karaokePill = karaokePillPaint,
+            lineSpacingFactor = lineSpacingFactor,
+          ),
           Triple(measuredLines, blockW, blockH),
         )
       }
@@ -866,6 +1059,7 @@ class KineticCompositionRenderer(private val context: Context) {
             paints.fill.textSize = newSize
             paints.glow?.textSize = newSize
             paints.stroke?.textSize = newSize
+            paints.karaokeHighlight?.textSize = newSize
             val textStr = if (el.uppercase) el.text.uppercase() else el.text
             val fm = paints.fill.fontMetrics
             val singleW = paints.fill.measureText(textStr)
@@ -874,8 +1068,17 @@ class KineticCompositionRenderer(private val context: Context) {
             var xAcc = 0f
             val spaceW = paints.fill.measureText(" ")
             tokens.forEachIndexed { tIdx, tok ->
-              wordSpans.add(MeasuredWordSpan(tok, xAcc, el.wordIndices.getOrNull(tIdx)))
-              xAcc += paints.fill.measureText(tok) + if (tIdx < tokens.lastIndex) spaceW else 0f
+              val tokW = paints.fill.measureText(tok)
+              wordSpans.add(
+                MeasuredWordSpan(
+                  text = tok,
+                  startXInLine = xAcc,
+                  widthPx = tokW,
+                  wordIndexInComp = el.wordIndices.getOrNull(tIdx),
+                  globalWordOrder = tIdx,
+                )
+              )
+              xAcc += tokW + if (tIdx < tokens.lastIndex) spaceW else 0f
             }
             val line = MeasuredLine(textStr, singleW, fm.ascent, fm.descent, wordSpans)
             val newH = (line.heightPx * paints.lineSpacingFactor).coerceAtLeast(1f)
@@ -918,6 +1121,9 @@ class KineticCompositionRenderer(private val context: Context) {
             glowPaint = paints.glow,
             strokePaint = paints.stroke,
             backgroundPaint = paints.background,
+            karaokeHighlightPaint = paints.karaokeHighlight,
+            karaokePillPaint = paints.karaokePill,
+            totalWordsInElement = lines.sumOf { it.words.size }.coerceAtLeast(1),
             lines = lines,
             blockWidthPx = blockW,
             blockHeightPx = blockH,
@@ -1000,6 +1206,59 @@ class KineticCompositionRenderer(private val context: Context) {
       Color.parseColor(hex)
     } catch (_: Exception) {
       Color.WHITE
+    }
+  }
+
+  data class KaraokeWordState(
+    val isActive: Boolean,
+    val progress01: Float,
+    val isSpokenAlready: Boolean,
+  )
+
+  companion object {
+    /**
+     * Resolves millisecond-exact active-word karaoke state.
+     * Uses exact [CaptionComposition.wordMappings] when present, or smoothly interpolates
+     * proportional slices across [comp.startMs..comp.endMs] so karaoke works even on manual scripts.
+     */
+    fun resolveActiveWordTiming(
+      comp: CaptionComposition,
+      globalWordOrder: Int,
+      mappedWordIndex: Int?,
+      totalWordsInElement: Int,
+      positionMs: Long,
+    ): KaraokeWordState {
+      val exactTiming =
+        mappedWordIndex?.let { comp.wordMappings.getOrNull(it) }
+          ?: comp.wordMappings.getOrNull(globalWordOrder)
+      val wStart: Long
+      val wEnd: Long
+      if (exactTiming != null && exactTiming.endMs > exactTiming.startMs) {
+        wStart = exactTiming.startMs
+        wEnd = exactTiming.endMs
+      } else {
+        val count = totalWordsInElement.coerceAtLeast(1)
+        val dur = (comp.endMs - comp.startMs).coerceAtLeast(120L)
+        val slice = dur.toFloat() / count.toFloat()
+        wStart = comp.startMs + (slice * globalWordOrder).toLong()
+        wEnd =
+          if (globalWordOrder >= count - 1) comp.endMs
+          else max(wStart + 60L, comp.startMs + (slice * (globalWordOrder + 1)).toLong())
+      }
+      val isActive = positionMs in wStart..wEnd
+      val progress =
+        if (isActive) {
+          ((positionMs - wStart).toFloat() / max(40L, wEnd - wStart).toFloat()).coerceIn(0f, 1f)
+        } else if (positionMs > wEnd) {
+          1f
+        } else {
+          0f
+        }
+      return KaraokeWordState(
+        isActive = isActive,
+        progress01 = progress,
+        isSpokenAlready = positionMs > wEnd,
+      )
     }
   }
 }

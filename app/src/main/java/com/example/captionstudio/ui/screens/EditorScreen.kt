@@ -108,6 +108,8 @@ import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.HookPacingTemplate
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.SafeRegion
@@ -206,6 +208,9 @@ fun EditorScreen(
   onScaleAllText: (Float) -> Unit = {},
   onSetAllHeight: (Float) -> Unit = {},
   onSetAllEnergy: (Float) -> Unit = {},
+  onPinchScaleComposition: (String, Float, Boolean) -> Unit = { _, _, _ -> },
+  onApplyHookPacing: (HookPacingTemplate) -> Unit = {},
+  onSetAllKaraokeMode: (KaraokeHighlightMode) -> Unit = {},
   onQuickEditWord: (Int, String, HierarchyLevel, Boolean) -> Unit = { _, _, _, _ -> },
   onDeleteWord: (Int) -> Unit = {},
   onOpenPresets: () -> Unit,
@@ -327,6 +332,7 @@ fun EditorScreen(
             onDragCompositionAnchor = { id, ax, ay ->
               onUpdatePosition(id, ax, ay, SafeRegion.CUSTOM, false)
             },
+            onPinchScaleComposition = onPinchScaleComposition,
             modifier = Modifier.fillMaxHeight(),
           )
 
@@ -682,6 +688,8 @@ fun EditorScreen(
               project = project,
               activeComp = activeComp,
               playheadMs = playheadMs,
+              totalDurationMs = totalDuration,
+              waveformBins = autoTranscribeState.waveformBins,
               customPresets = customPresets,
               safeZonePlatform = safeZonePlatform,
               isBusy = isBusy,
@@ -690,6 +698,8 @@ fun EditorScreen(
               onScaleAllText = onScaleAllText,
               onSetAllHeight = onSetAllHeight,
               onSetAllEnergy = onSetAllEnergy,
+              onSetAllKaraokeMode = onSetAllKaraokeMode,
+              onApplyHookPacing = onApplyHookPacing,
               onCycleSafeZone = onCycleSafeZone,
               onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
               onAutoTranscribe = { onAutoTranscribeVideo(false) },
@@ -697,6 +707,14 @@ fun EditorScreen(
                 onSetCreatorMode(false)
                 activeTool = EditorTool.TIMING
               },
+              onSelectComposition = { compId ->
+                isPlaying = false
+                project.compositions.firstOrNull { it.id == compId }?.let { c ->
+                  onPlayheadUpdate(c.startMs + 80L)
+                }
+                onSelectComposition(compId)
+              },
+              onUpdateTiming = onUpdateTiming,
               onWordClickSeek = { ms ->
                 isPlaying = false
                 onPlayheadUpdate(ms)
@@ -775,6 +793,7 @@ fun EditorScreen(
                     }
                   },
                   onApplyPreset = onApplyPreset,
+                  onApplyHookPacing = onApplyHookPacing,
                   onOpenPresets = onOpenPresets,
                   onOpenFontTab = { activeTool = EditorTool.FONT },
                   onGenerate = onGenerateCompositions,
@@ -996,6 +1015,7 @@ fun EditorScreen(
             onDragCompositionAnchor = { id, ax, ay ->
               onUpdatePosition(id, ax, ay, SafeRegion.CUSTOM, false)
             },
+            onPinchScaleComposition = onPinchScaleComposition,
             modifier = Modifier.fillMaxHeight(),
           )
         }

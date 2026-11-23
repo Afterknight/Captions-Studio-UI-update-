@@ -3,7 +3,7 @@ import java.security.MessageDigest
 import org.gradle.api.tasks.Copy
 
 /**
- * Dedicated GitHub Actions release APK Gradle build script for Captions Studio v-beta-0.
+ * Dedicated GitHub Actions release APK Gradle build script for Captions Studio v-beta-0.5.
  *
  * Usage (GitHub Actions or local CI):
  *   gradle --init-script github-release.gradle.kts :app:buildGitHubReleaseApk --no-daemon
@@ -16,7 +16,7 @@ import org.gradle.api.tasks.Copy
 allprojects {
   if (path == ":app") {
     afterEvaluate {
-      val releaseApkName = "Captions-Studio-v-beta-0-release.apk"
+      val releaseApkName = "Captions-Studio-v-beta-0.5-release.apk"
       val releaseDistDir = rootProject.layout.projectDirectory.dir("release-dist")
 
       val stageGitHubReleaseApk =
@@ -36,7 +36,7 @@ allprojects {
       tasks.register("buildGitHubReleaseApk") {
         group = "release"
         description =
-          "Compiles the signed release APK for Captions Studio v-beta-0 and writes its SHA-256 checksum for GitHub Actions."
+          "Compiles the signed release APK for Captions Studio v-beta-0.5 and writes its SHA-256 checksum for GitHub Actions."
         dependsOn(stageGitHubReleaseApk)
 
         val stagedApk = releaseDistDir.file(releaseApkName)

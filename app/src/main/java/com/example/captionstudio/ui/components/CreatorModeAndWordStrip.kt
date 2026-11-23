@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
@@ -62,6 +63,9 @@ import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.HookPacingTemplate
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
+import com.example.captionstudio.domain.model.PresetCategory
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.domain.model.WordTiming
@@ -90,6 +94,8 @@ fun CreatorModeQuickPanel(
   project: CaptionProject,
   activeComp: CaptionComposition?,
   playheadMs: Long,
+  totalDurationMs: Long = 8000L,
+  waveformBins: List<Float> = emptyList(),
   customPresets: List<PresetDefinition>,
   safeZonePlatform: SafeZonePlatform,
   isBusy: Boolean,
@@ -98,16 +104,31 @@ fun CreatorModeQuickPanel(
   onScaleAllText: (Float) -> Unit,
   onSetAllHeight: (Float) -> Unit,
   onSetAllEnergy: (Float) -> Unit,
+  onSetAllKaraokeMode: (KaraokeHighlightMode) -> Unit = {},
+  onApplyHookPacing: (HookPacingTemplate) -> Unit = {},
   onCycleSafeZone: () -> Unit,
   onToggleDepthMask: () -> Unit,
   onAutoTranscribe: () -> Unit,
   onOpenScriptEditor: () -> Unit,
+  onSelectComposition: (String) -> Unit = {},
+  onUpdateTiming: (String, Long, Long) -> Unit = { _, _, _ -> },
   onWordClickSeek: (Long) -> Unit,
   onWordQuickEdit: (wordIndex: Int, newText: String, emphasis: HierarchyLevel, behindSubject: Boolean) -> Unit,
   onWordDelete: (wordIndex: Int) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val allPresets = remember(customPresets) { customPresets + PresetCatalog.presets }
+  var styleCategoryFilter by remember { mutableStateOf("all") }
+  val allPresets =
+    remember(customPresets, styleCategoryFilter) {
+      when (styleCategoryFilter) {
+        "normal" -> PresetCatalog.normalPresets
+        "kinetic" -> customPresets + PresetCatalog.kineticPresets
+        else -> customPresets + PresetCatalog.presets
+      }
+    }
+  val activeKaraokeMode =
+    activeComp?.elements?.firstOrNull()?.karaokeMode ?: KaraokeHighlightMode.OFF
+
   val avgSizeNorm =
     remember(activeComp?.id) {
       val dom = activeComp?.elements?.firstOrNull { it.hierarchyLevel == HierarchyLevel.DOMINANT }
@@ -124,7 +145,7 @@ fun CreatorModeQuickPanel(
   }
 
   Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-    // 1-Tap Style Strip + Reference Video Style Cloner Trigger
+    // 1-Tap Style Strip with Normal | Kinetic | All filter pills
     StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
       Column(
         modifier = Modifier.padding(vertical = 14.dp),
@@ -136,17 +157,58 @@ fun CreatorModeQuickPanel(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
-            text = "1-Tap Caption Styles",
+            text = "1-Tap Caption Styles (${PresetCatalog.presets.size})",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             color = StudioTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
           )
           Text(
             text = "See all",
             style = MaterialTheme.typography.labelMedium,
             color = StudioCoralLight,
-            modifier = Modifier.clickable { onOpenAllPresets() },
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.clickable { onOpenAllPresets() }.padding(start = 8.dp),
           )
+        }
+
+        Row(
+          modifier =
+            Modifier.fillMaxWidth()
+              .horizontalScroll(rememberScrollState())
+              .padding(horizontal = 16.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          listOf(
+            "all" to "All",
+            "normal" to "Normal (${PresetCatalog.normalPresets.size})",
+            "kinetic" to "Kinetic (${PresetCatalog.kineticPresets.size})",
+          ).forEach { (key, label) ->
+            val isChosen = styleCategoryFilter == key
+            Surface(
+              onClick = { styleCategoryFilter = key },
+              color = if (isChosen) StudioCoralContainer else StudioElevated,
+              shape = CircleShape,
+              modifier =
+                Modifier.heightIn(min = 38.dp)
+                  .border(1.dp, if (isChosen) StudioCoral else StudioHairline, CircleShape)
+                  .testTag("creator_style_filter_$key"),
+            ) {
+              Box(modifier = Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                Text(
+                  text = label,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+                  color = if (isChosen) StudioCoralLight else StudioTextSecondary,
+                  maxLines = 1,
+                  softWrap = false,
+                )
+              }
+            }
+          }
         }
 
         LazyRow(
@@ -178,6 +240,16 @@ fun CreatorModeQuickPanel(
                     contentDescription = null,
                     tint = if (selected) Color.White else StudioCoralLight,
                     modifier = Modifier.size(13.dp),
+                  )
+                } else {
+                  Box(
+                    modifier =
+                      Modifier.size(8.dp)
+                        .clip(CircleShape)
+                        .background(
+                          if (preset.category == PresetCategory.NORMAL) Color(0xFF8BE9FD)
+                          else StudioCoralLight
+                        )
                   )
                 }
                 Text(
@@ -276,7 +348,133 @@ fun CreatorModeQuickPanel(
             modifier = Modifier.testTag("creator_transcribe_button"),
           )
         }
+
+        // 1-Tap Active-Word Karaoke Mode Strip
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Active-Word Karaoke",
+            style = MaterialTheme.typography.labelMedium,
+            color = StudioTextSecondary,
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            KaraokeHighlightMode.entries.forEach { mode ->
+              val isChosen = activeKaraokeMode == mode
+              Surface(
+                onClick = { onSetAllKaraokeMode(mode) },
+                color = if (isChosen) StudioCoralContainer else StudioElevated,
+                shape = CircleShape,
+                modifier =
+                  Modifier.heightIn(min = 42.dp)
+                    .border(1.dp, if (isChosen) StudioCoral else StudioHairline, CircleShape)
+                    .testTag("creator_karaoke_${mode.name.lowercase()}"),
+              ) {
+                Box(
+                  modifier = Modifier.padding(horizontal = 12.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Text(
+                    text = mode.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isChosen) StudioCoralLight else StudioTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                }
+              }
+            }
+          }
+        }
       }
+    }
+
+    // Batch Hook (0–3s) & B-Roll Pacing Templates
+    StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+      Column(
+        modifier = Modifier.padding(vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Icon(
+            Icons.Filled.Bolt,
+            contentDescription = null,
+            tint = Color(0xFFFFE14D),
+            modifier = Modifier.size(16.dp),
+          )
+          Text(
+            text = "Hook & B-Roll Pacing (0–3s vs Body)",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = StudioTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+        LazyRow(
+          contentPadding = PaddingValues(horizontal = 16.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          items(HookPacingTemplate.entries, key = { it.id }) { tpl ->
+            Surface(
+              onClick = { onApplyHookPacing(tpl) },
+              color = StudioElevated,
+              shape = RoundedCornerShape(14.dp),
+              modifier =
+                Modifier.width(196.dp)
+                  .heightIn(min = 66.dp)
+                  .border(1.dp, StudioHairlineStrong, RoundedCornerShape(14.dp))
+                  .testTag("creator_hook_template_${tpl.id}"),
+            ) {
+              Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+              ) {
+                Text(
+                  text = tpl.title,
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color =
+                    if (tpl == HookPacingTemplate.UNIFORM_RESET) StudioTextSecondary
+                    else StudioCoralLight,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = tpl.subtitle,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = StudioTextSecondary,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Visual Waveform Caption Timeline (drag left/right handles to trim caption blocks directly over audio)
+    if (project.compositions.isNotEmpty()) {
+      VisualCaptionTimeline(
+        compositions = project.compositions,
+        waveformBins = waveformBins,
+        totalDurationMs = totalDurationMs,
+        playheadMs = playheadMs,
+        selectedCompositionId = activeComp?.id,
+        onSeekPlayhead = onWordClickSeek,
+        onSelectComposition = onSelectComposition,
+        onTrimComposition = onUpdateTiming,
+      )
     }
 
     // Descript-Style Word-Tap Transcript Editor (derives editable words from compositions if wordTimings empty)

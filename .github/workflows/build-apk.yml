@@ -1,4 +1,4 @@
-name: Build & Publish Release APK (Captions Studio v-beta-0)
+name: Build & Publish Release APK (Captions Studio v-beta-0.5)
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
       release_tag:
         description: 'GitHub Release tag'
         required: false
-        default: 'v-beta-0'
+        default: 'v-beta-0.5'
 
 permissions:
   contents: write
@@ -67,7 +67,7 @@ jobs:
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
-              -dname "CN=Captions Studio v-beta-0,O=Captions Studio,C=US"
+              -dname "CN=Captions Studio v-beta-0.5,O=Captions Studio,C=US"
           fi
 
           echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
@@ -85,10 +85,10 @@ jobs:
       - name: Upload Release APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Captions-Studio-v-beta-0-release-apk
+          name: Captions-Studio-v-beta-0.5-release-apk
           path: |
-            release-dist/Captions-Studio-v-beta-0-release.apk
-            release-dist/Captions-Studio-v-beta-0-release.apk.sha256
+            release-dist/Captions-Studio-v-beta-0.5-release.apk
+            release-dist/Captions-Studio-v-beta-0.5-release.apk.sha256
           if-no-files-found: error
 
       - name: Determine release tag
@@ -99,7 +99,7 @@ jobs:
           elif [ -n "${{ github.event.inputs.release_tag }}" ]; then
             TAG="${{ github.event.inputs.release_tag }}"
           else
-            TAG="v-beta-0"
+            TAG="v-beta-0.5"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -111,5 +111,5 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            release-dist/Captions-Studio-v-beta-0-release.apk
-            release-dist/Captions-Studio-v-beta-0-release.apk.sha256
+            release-dist/Captions-Studio-v-beta-0.5-release.apk
+            release-dist/Captions-Studio-v-beta-0.5-release.apk.sha256

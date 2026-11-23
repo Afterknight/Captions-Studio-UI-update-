@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Mic
@@ -85,6 +86,9 @@ import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
+import com.example.captionstudio.domain.model.HookPacingTemplate
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
+import com.example.captionstudio.domain.model.PresetCategory
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.media.AutoTranscribeUiState
 import com.example.captionstudio.media.OfflineVoicePackStatus
@@ -102,6 +106,7 @@ import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.StudioSubtlePill
 import com.example.captionstudio.ui.components.StyleGlyphToggle
 import com.example.captionstudio.ui.components.TypographyInspectorDeck
+import com.example.captionstudio.ui.components.VisualCaptionTimeline
 import com.example.captionstudio.ui.components.studioPressScale
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
@@ -139,6 +144,7 @@ internal fun StyleQuickPanel(
   onScopeChange: (ApplyScope) -> Unit,
   onSelectFontForLayer: (String, String) -> Unit,
   onApplyPreset: (String) -> Unit,
+  onApplyHookPacing: (HookPacingTemplate) -> Unit = {},
   onOpenPresets: () -> Unit,
   onOpenFontTab: () -> Unit,
   onGenerate: (Boolean) -> Unit,
@@ -149,6 +155,15 @@ internal fun StyleQuickPanel(
   val activeEl =
     activeComp?.elements?.firstOrNull { it.id == selectedElementId }
       ?: activeComp?.elements?.firstOrNull()
+  var styleFilter by remember { mutableStateOf("all") }
+  val visiblePresets =
+    remember(styleFilter) {
+      when (styleFilter) {
+        "normal" -> PresetCatalog.normalPresets
+        "kinetic" -> PresetCatalog.kineticPresets
+        else -> PresetCatalog.presets
+      }
+    }
 
   Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
     // Primary "Caption Style" Card matching reference mockup
@@ -206,20 +221,126 @@ internal fun StyleQuickPanel(
           }
         }
 
-        // First 4 presets rendered in clean 4-column visual symmetry matching mockup (scrollable for all 8)
+        // Category Filter Pills: All | Normal | Kinetic
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          listOf(
+            "all" to "All (${PresetCatalog.presets.size})",
+            "normal" to "Normal (${PresetCatalog.normalPresets.size})",
+            "kinetic" to "Kinetic (${PresetCatalog.kineticPresets.size})",
+          ).forEach { (key, label) ->
+            val isChosen = styleFilter == key
+            Surface(
+              onClick = { styleFilter = key },
+              color = if (isChosen) StudioCoralContainer else StudioElevated,
+              shape = CircleShape,
+              modifier =
+                Modifier.heightIn(min = 36.dp)
+                  .border(1.dp, if (isChosen) StudioCoral else StudioHairline, CircleShape)
+                  .testTag("pro_style_filter_$key"),
+            ) {
+              Box(modifier = Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                Text(
+                  text = label,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+                  color = if (isChosen) StudioCoralLight else StudioTextSecondary,
+                  maxLines = 1,
+                  softWrap = false,
+                )
+              }
+            }
+          }
+        }
+
+        // Scrollable stylized Aa tiles for all 36 Normal & Kinetic presets
         Row(
           modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          PresetCatalog.presets.forEachIndexed { index, preset ->
+          visiblePresets.forEachIndexed { index, preset ->
             val selected = preset.id == project.presetId
             CaptionStyleTile(
               presetId = preset.id,
               presetName = preset.name,
+              isNormal = preset.category == PresetCategory.NORMAL,
+              hasKaraoke = preset.defaultKaraokeMode != KaraokeHighlightMode.OFF,
               styleVariantIndex = index,
               selected = selected,
               onClick = { onApplyPreset(preset.id) },
             )
+          }
+        }
+      }
+    }
+
+    // Batch Hook & B-Roll Pacing (0–3s vs Body)
+    StudioGlassCard(
+      modifier = Modifier.fillMaxWidth(),
+      cornerRadius = 22.dp,
+      containerColor = Color(0xFF111115),
+      borderColor = StudioHairline,
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Bolt,
+            contentDescription = null,
+            tint = Color(0xFFFFE14D),
+            modifier = Modifier.size(16.dp),
+          )
+          Text(
+            text = "Hook & B-Roll Pacing (0–3s)",
+            style = MaterialTheme.typography.titleSmall,
+            color = StudioTextPrimary,
+          )
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          HookPacingTemplate.entries.forEach { tpl ->
+            Surface(
+              onClick = { onApplyHookPacing(tpl) },
+              color = StudioElevated,
+              shape = RoundedCornerShape(14.dp),
+              modifier =
+                Modifier.width(184.dp)
+                  .heightIn(min = 60.dp)
+                  .border(1.dp, StudioHairlineStrong, RoundedCornerShape(14.dp))
+                  .testTag("pro_hook_template_${tpl.id}"),
+            ) {
+              Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+              ) {
+                Text(
+                  text = tpl.title,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color =
+                    if (tpl == HookPacingTemplate.UNIFORM_RESET) StudioTextSecondary
+                    else StudioCoralLight,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = tpl.subtitle,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = StudioTextSecondary,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+            }
           }
         }
       }
@@ -485,6 +606,8 @@ internal fun StyleQuickPanel(
 private fun CaptionStyleTile(
   presetId: String,
   presetName: String,
+  isNormal: Boolean,
+  hasKaraoke: Boolean,
   styleVariantIndex: Int,
   selected: Boolean,
   onClick: () -> Unit,
@@ -494,8 +617,8 @@ private fun CaptionStyleTile(
 
   Box(
     modifier =
-      Modifier.width(76.dp)
-        .height(74.dp)
+      Modifier.width(86.dp)
+        .height(78.dp)
         .studioPressScale(interactionSource = interactionSource)
         .clip(shape)
         .background(if (selected) Color(0xFF171416) else Color(0xFF151519))
@@ -512,54 +635,77 @@ private fun CaptionStyleTile(
         .testTag("quick_style_$presetId"),
     contentAlignment = Alignment.Center,
   ) {
+    if (hasKaraoke) {
+      Box(
+        modifier =
+          Modifier.align(Alignment.TopEnd)
+            .padding(6.dp)
+            .size(6.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFFFE14D))
+      )
+    }
     Column(
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center,
+      modifier = Modifier.padding(horizontal = 5.dp),
     ) {
-      when (styleVariantIndex % 4) {
-        0 -> {
-          // Clean solid Aa
-          Text(
-            text = "Aa",
-            fontSize = 23.sp,
-            fontWeight = FontWeight.Medium,
-            color = StudioTextPrimary,
-          )
-        }
-        1 -> {
-          // Underlined Aa
-          Text(
-            text = "Aa",
-            fontSize = 23.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = StudioTextPrimary,
-            textDecoration = TextDecoration.Underline,
-          )
-        }
-        2 -> {
-          // Soft pill highlight Aa
+      when {
+        isNormal && styleVariantIndex % 2 == 0 -> {
           Box(
             modifier =
-              Modifier.clip(CircleShape)
+              Modifier.clip(RoundedCornerShape(8.dp))
                 .background(Color.White.copy(alpha = 0.14f))
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 10.dp, vertical = 3.dp),
             contentAlignment = Alignment.Center,
           ) {
             Text(
               text = "Aa",
               fontSize = 19.sp,
+              fontWeight = FontWeight.SemiBold,
+              color = StudioTextPrimary,
+            )
+          }
+        }
+        styleVariantIndex % 4 == 0 -> {
+          Text(
+            text = "Aa",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = StudioTextPrimary,
+          )
+        }
+        styleVariantIndex % 4 == 1 -> {
+          Text(
+            text = "Aa",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = StudioTextPrimary,
+            textDecoration = TextDecoration.Underline,
+          )
+        }
+        styleVariantIndex % 4 == 2 -> {
+          Box(
+            modifier =
+              Modifier.clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.14f))
+                .padding(horizontal = 11.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = "Aa",
+              fontSize = 18.sp,
               fontWeight = FontWeight.Medium,
               color = StudioTextPrimary,
             )
           }
         }
         else -> {
-          // Outlined hollow Aa
           Text(
             text = "Aa",
             style =
               TextStyle(
-                fontSize = 24.sp,
+                fontSize = 23.sp,
                 fontWeight = FontWeight.Bold,
                 color = StudioTextPrimary.copy(alpha = 0.88f),
                 drawStyle = Stroke(width = 2.4f),
@@ -567,16 +713,16 @@ private fun CaptionStyleTile(
           )
         }
       }
-      if (styleVariantIndex >= 4) {
-        Spacer(Modifier.height(2.dp))
-        Text(
-          text = presetName.lowercase().replaceFirstChar { it.uppercase() },
-          style = MaterialTheme.typography.labelSmall,
-          fontSize = 9.sp,
-          color = if (selected) StudioCoralLight else StudioTextSecondary,
-          maxLines = 1,
-        )
-      }
+      Spacer(Modifier.height(3.dp))
+      Text(
+        text = presetName.lowercase().replaceFirstChar { it.uppercase() },
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 9.5.sp,
+        color = if (selected) StudioCoralLight else StudioTextSecondary,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
   }
 }
@@ -1036,8 +1182,22 @@ internal fun TimingWorkspacePanel(
     ) { tab ->
       when (tab) {
         0 -> {
-          // Captions & Timeline Editor
+          // Captions & Visual Waveform Timeline Editor
           Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (project.compositions.isNotEmpty()) {
+              VisualCaptionTimeline(
+                compositions = project.compositions,
+                waveformBins = autoTranscribeState.waveformBins,
+                totalDurationMs = totalDurationMs,
+                playheadMs = playheadMs,
+                selectedCompositionId = activeComp?.id,
+                onSeekPlayhead = onSeekMs,
+                onSelectComposition = { compId ->
+                  project.compositions.firstOrNull { it.id == compId }?.let(onSelectComposition)
+                },
+                onTrimComposition = onUpdateTiming,
+              )
+            }
             if (activeComp != null) {
               StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

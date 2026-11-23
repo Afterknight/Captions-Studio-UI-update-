@@ -18,10 +18,10 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
   @Test
-  fun `app name matches Captions Studio v-beta-0`() {
+  fun `app name matches Caption Studio`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("Captions Studio v-beta-0", appName)
+    assertEquals("Caption Studio", appName)
   }
 
   @Test

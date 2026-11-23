@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -62,6 +64,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
+import com.example.captionstudio.domain.model.PresetCategory
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.VideoAnalysisReport
@@ -98,6 +102,23 @@ fun PresetsScreen(
   val context = LocalContext.current
   val renderer = remember(context) { KineticCompositionRenderer(context) }
   var showImportDialog by remember { mutableStateOf(false) }
+  var selectedFilter by remember { mutableStateOf("all") }
+
+  val normalCount = PresetCatalog.normalPresets.size
+  val kineticCount = PresetCatalog.kineticPresets.size
+  val totalBuiltIn = PresetCatalog.presets.size
+
+  val visibleBuiltIn =
+    remember(selectedFilter) {
+      when (selectedFilter) {
+        "normal" -> PresetCatalog.normalPresets
+        "kinetic" -> PresetCatalog.kineticPresets
+        "custom" -> emptyList()
+        else -> PresetCatalog.presets
+      }
+    }
+  val showCustomSection =
+    customPresets.isNotEmpty() && (selectedFilter == "all" || selectedFilter == "custom")
 
   fun sharePresetLink(preset: PresetDefinition) {
     val link = StyleDeepLinkCodec.encodeToDeepLink(preset)
@@ -114,7 +135,7 @@ fun PresetsScreen(
     topBar = {
       StudioMinimalTopBar(
         title = "Caption Styles",
-        subtitle = "Clone, share & preserve timings",
+        subtitle = "$totalBuiltIn styles • Normal & Kinetic",
         onBack = onBack,
         backButtonTag = "presets_back_button",
       )
@@ -201,7 +222,55 @@ fun PresetsScreen(
           }
         }
 
-        if (customPresets.isNotEmpty()) {
+        item(key = "preset_category_filter_bar") {
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            val filterOptions =
+              buildList {
+                add("all" to "All (${totalBuiltIn + customPresets.size})")
+                add("normal" to "Normal ($normalCount)")
+                add("kinetic" to "Kinetic ($kineticCount)")
+                if (customPresets.isNotEmpty()) {
+                  add("custom" to "My Styles (${customPresets.size})")
+                }
+              }
+            filterOptions.forEach { (key, label) ->
+              val isChosen = selectedFilter == key
+              Surface(
+                onClick = { selectedFilter = key },
+                color = if (isChosen) StudioCoral else StudioCard,
+                shape = CircleShape,
+                modifier =
+                  Modifier.heightIn(min = 48.dp)
+                    .border(
+                      1.dp,
+                      if (isChosen) StudioCoralLight else StudioHairlineStrong,
+                      CircleShape,
+                    )
+                    .testTag("presets_filter_$key"),
+              ) {
+                Box(
+                  modifier = Modifier.padding(horizontal = 16.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isChosen) Color.White else StudioTextPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        if (showCustomSection) {
           item(key = "custom_presets_header") {
             Text(
               text = "My Cloned & Imported Styles (${customPresets.size})",
@@ -224,18 +293,26 @@ fun PresetsScreen(
               onDelete = { onDeleteCustomPreset(preset.id) },
             )
           }
+        }
+
+        if (visibleBuiltIn.isNotEmpty()) {
           item(key = "builtin_presets_header") {
             Text(
-              text = "Studio Curated Presets",
+              text =
+                when (selectedFilter) {
+                  "normal" -> "Everyday Normal Captions ($normalCount)"
+                  "kinetic" -> "Kinetic Typography Styles ($kineticCount)"
+                  else -> "All Curated Presets ($totalBuiltIn)"
+                },
               style = MaterialTheme.typography.titleSmall,
               fontWeight = FontWeight.SemiBold,
               color = StudioTextSecondary,
-              modifier = Modifier.padding(top = 6.dp),
+              modifier = Modifier.padding(top = 4.dp),
             )
           }
         }
 
-        items(PresetCatalog.presets, key = { it.id }) { preset ->
+        items(visibleBuiltIn, key = { it.id }) { preset ->
           PresetPreviewCard(
             preset = preset,
             isSelected = preset.id == activePresetId,
@@ -427,6 +504,44 @@ private fun PresetPreviewCard(
                   softWrap = false,
                 )
               }
+            }
+          }
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Surface(
+            color =
+              if (preset.category == PresetCategory.NORMAL) Color(0xFF1F2A33)
+              else StudioCoralContainer.copy(alpha = 0.65f),
+            shape = CircleShape,
+          ) {
+            Text(
+              text = preset.category.label,
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color =
+                if (preset.category == PresetCategory.NORMAL) Color(0xFF8BE9FD)
+                else StudioCoralLight,
+              maxLines = 1,
+              softWrap = false,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+          }
+          if (preset.defaultKaraokeMode != KaraokeHighlightMode.OFF) {
+            Surface(color = Color(0xFF2B2412), shape = CircleShape) {
+              Text(
+                text = "Karaoke • ${preset.defaultKaraokeMode.label}",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFFFE14D),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+              )
             }
           }
         }

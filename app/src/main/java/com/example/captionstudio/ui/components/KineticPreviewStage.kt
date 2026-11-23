@@ -14,7 +14,11 @@ import kotlinx.coroutines.isActive
 import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,12 +64,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -96,6 +105,77 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+data class MagneticSnapResult(
+  val x: Float,
+  val y: Float,
+  val snappedVerticalX: Float? = null,
+  val snappedHorizontalY: Float? = null,
+  val snapLabel: String? = null,
+)
+
+/**
+ * Computes magnetic snapping for direct on-canvas caption dragging against center axes,
+ * upper/lower safe-zone anchors, and platform-specific social UI boundaries.
+ */
+fun computeMagneticSnap(
+  rawX: Float,
+  rawY: Float,
+  safeZonePlatform: SafeZonePlatform = SafeZonePlatform.NONE,
+  threshold: Float = 0.028f,
+): MagneticSnapResult {
+  val clampedX = rawX.coerceIn(0.16f, 0.84f)
+  val clampedY = rawY.coerceIn(0.10f, 0.90f)
+
+  val verticalTargets =
+    buildList {
+      add(0.50f to "Center")
+      add(0.27f to "Left Safe")
+      add(0.73f to "Right Safe")
+      if (safeZonePlatform == SafeZonePlatform.TIKTOK ||
+          safeZonePlatform == SafeZonePlatform.REELS ||
+          safeZonePlatform == SafeZonePlatform.SHORTS
+      ) {
+        add(0.42f to "${safeZonePlatform.shortLabel} Safe X")
+      }
+    }
+  val horizontalTargets =
+    buildList {
+      add(0.50f to "Middle")
+      add(0.24f to "Upper Safe")
+      add(0.78f to "Lower Safe")
+      when (safeZonePlatform) {
+        SafeZonePlatform.TIKTOK -> add(0.74f to "TikTok Safe")
+        SafeZonePlatform.REELS -> add(0.73f to "Reels Safe")
+        SafeZonePlatform.SHORTS -> add(0.76f to "Shorts Safe")
+        else -> Unit
+      }
+    }
+
+  val bestX = verticalTargets.minByOrNull { abs(clampedX - it.first) }
+  val bestY = horizontalTargets.minByOrNull { abs(clampedY - it.first) }
+
+  val snappedX = bestX?.takeIf { abs(clampedX - it.first) <= threshold }
+  val snappedY = bestY?.takeIf { abs(clampedY - it.first) <= threshold }
+
+  val finalX = snappedX?.first ?: clampedX
+  val finalY = snappedY?.first ?: clampedY
+  val label =
+    when {
+      snappedX != null && snappedY != null -> "${snappedX.second} • ${snappedY.second}"
+      snappedX != null -> snappedX.second
+      snappedY != null -> snappedY.second
+      else -> null
+    }
+
+  return MagneticSnapResult(
+    x = finalX,
+    y = finalY,
+    snappedVerticalX = snappedX?.first,
+    snappedHorizontalY = snappedY?.first,
+    snapLabel = label,
+  )
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun KineticPreviewStage(
@@ -117,9 +197,11 @@ fun KineticPreviewStage(
   onPlayheadUpdate: (Long) -> Unit,
   onPlayingChanged: (Boolean) -> Unit,
   onDragCompositionAnchor: (compId: String, anchorX: Float, anchorY: Float) -> Unit,
+  onPinchScaleComposition: (compId: String, scaleMultiplier: Float, recordHistory: Boolean) -> Unit = { _, _, _ -> },
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
+  val haptic = LocalHapticFeedback.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val renderer = remember(context) { KineticCompositionRenderer(context) }
   val preset = remember(presetId) { PresetCatalog.findById(presetId) }
@@ -281,6 +363,12 @@ fun KineticPreviewStage(
   val ratio = aspectRatio.ratioWidth / aspectRatio.ratioHeight
   var dragAnchorX by remember { mutableStateOf(0.5f) }
   var dragAnchorY by remember { mutableStateOf(0.7f) }
+  var activeSnapState by remember { mutableStateOf<MagneticSnapResult?>(null) }
+  var isDraggingCanvas by remember { mutableStateOf(false) }
+  var pinchBadgeText by remember { mutableStateOf<String?>(null) }
+  val latestSafeZonePlatform by rememberUpdatedState(safeZonePlatform)
+  val latestOnDragAnchor by rememberUpdatedState(onDragCompositionAnchor)
+  val latestOnPinchScale by rememberUpdatedState(onPinchScaleComposition)
   val playerViewRef = remember(videoUriString) { mutableStateOf<PlayerView?>(null) }
   val cachedTextureViewRef = remember(videoUriString) { mutableStateOf<TextureView?>(null) }
   var activeSubjectMask by remember(videoUriString) { mutableStateOf<Bitmap?>(null) }
@@ -399,36 +487,89 @@ fun KineticPreviewStage(
       )
     }
 
-    // Unified Kinetic Typography Overlay Canvas + Tap to Play/Pause + Drag Repositioning
+    // Unified Kinetic Typography Overlay Canvas + Tap Play/Pause + Magnetic Drag + Pinch-to-Resize
     Canvas(
       modifier =
         Modifier.fillMaxSize()
           .pointerInput(Unit) {
-            detectTapGestures(onTap = { latestOnPlayingChanged(!latestIsPlaying) })
-          }
-          .pointerInput(Unit) {
-            detectDragGestures(
-              onDragStart = {
-                val active =
-                  latestCompositions.firstOrNull { latestPlayhead in it.startMs..it.endMs }
-                    ?: latestCompositions.firstOrNull { it.id == latestSelectedId }
-                if (active != null) {
-                  dragAnchorX = active.anchorXFraction
-                  dragAnchorY = active.anchorYFraction
+            awaitEachGesture {
+              val firstDown = awaitFirstDown(requireUnconsumed = false)
+              var targetComp =
+                latestCompositions.firstOrNull { localPlayheadMs in it.startMs..it.endMs }
+                  ?: latestCompositions.firstOrNull { it.id == latestSelectedId }
+              var rawX = targetComp?.anchorXFraction ?: 0.50f
+              var rawY = targetComp?.anchorYFraction ?: 0.72f
+              dragAnchorX = rawX
+              dragAnchorY = rawY
+              var cumulativeZoom = 1f
+              var totalDragPx = 0f
+              var didTransform = false
+              var didPinch = false
+              var lastSnapKey: String? = null
+              val touchSlop = viewConfiguration.touchSlop
+
+              while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.isEmpty()) break
+
+                if (targetComp == null) {
+                  targetComp =
+                    latestCompositions.firstOrNull { localPlayheadMs in it.startMs..it.endMs }
+                      ?: latestCompositions.firstOrNull { it.id == latestSelectedId }
+                  if (targetComp != null) {
+                    rawX = targetComp.anchorXFraction
+                    rawY = targetComp.anchorYFraction
+                  }
                 }
-              },
-              onDrag = { change, dragAmount ->
-                change.consume()
-                val active =
-                  latestCompositions.firstOrNull { latestPlayhead in it.startMs..it.endMs }
-                    ?: latestCompositions.firstOrNull { it.id == latestSelectedId }
-                if (active != null && size.width > 0 && size.height > 0) {
-                  dragAnchorX = (dragAnchorX + dragAmount.x / size.width).coerceIn(0.16f, 0.84f)
-                  dragAnchorY = (dragAnchorY + dragAmount.y / size.height).coerceIn(0.10f, 0.90f)
-                  onDragCompositionAnchor(active.id, dragAnchorX, dragAnchorY)
+
+                val activeTarget = targetComp
+                if (pressed.size >= 2 && activeTarget != null) {
+                  val zoom = event.calculateZoom()
+                  val centroidSpread = event.calculateCentroidSize(useCurrent = false)
+                  if (centroidSpread > 0f && abs(zoom - 1f) > 0.004f) {
+                    didTransform = true
+                    didPinch = true
+                    isDraggingCanvas = false
+                    activeSnapState = null
+                    cumulativeZoom = (cumulativeZoom * zoom).coerceIn(0.45f, 2.2f)
+                    pinchBadgeText = "Size ${(cumulativeZoom * 100).toInt()}%"
+                    latestOnPinchScale(activeTarget.id, zoom, false)
+                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                  }
+                } else if (pressed.size == 1 && activeTarget != null && size.width > 0 && size.height > 0) {
+                  val pan = event.calculatePan()
+                  totalDragPx += pan.getDistance()
+                  if (totalDragPx > touchSlop) {
+                    didTransform = true
+                    isDraggingCanvas = true
+                    rawX = (rawX + pan.x / size.width).coerceIn(0.16f, 0.84f)
+                    rawY = (rawY + pan.y / size.height).coerceIn(0.10f, 0.90f)
+                    val snap = computeMagneticSnap(rawX, rawY, latestSafeZonePlatform)
+                    dragAnchorX = snap.x
+                    dragAnchorY = snap.y
+                    activeSnapState = snap
+                    val snapKey = "${snap.snappedVerticalX}|${snap.snappedHorizontalY}"
+                    if ((snap.snappedVerticalX != null || snap.snappedHorizontalY != null) && snapKey != lastSnapKey) {
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                    lastSnapKey = snapKey
+                    latestOnDragAnchor(activeTarget.id, snap.x, snap.y)
+                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                  }
                 }
-              },
-            )
+              }
+
+              if (!didTransform && !firstDown.isConsumed) {
+                latestOnPlayingChanged(!latestIsPlaying)
+              } else if (didPinch && targetComp != null) {
+                // Commit undo snapshot on pinch end
+                latestOnPinchScale(targetComp.id, 1f, true)
+              }
+              isDraggingCanvas = false
+              activeSnapState = null
+              pinchBadgeText = null
+            }
           }
     ) {
       val effectivePlatform =
@@ -564,8 +705,57 @@ fun KineticPreviewStage(
           wrapInOffscreenLayer = needsSubjectMask,
           shadowMultiplier = shadowFactor,
           selectedCompositionId = latestSelectedId,
-          drawSelectionGuide = !isPlaying,
+          drawSelectionGuide = !isPlaying || isDraggingCanvas,
           videoContentRect = activeMaskVideoRect,
+        )
+      }
+
+      // Live Magnetic Alignment Snap Lines while dragging captions directly on canvas
+      val snap = activeSnapState
+      if (isDraggingCanvas && snap != null) {
+        val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+        snap.snappedVerticalX?.let { vx ->
+          val px = vx * size.width
+          drawLine(
+            color = Color(0xFF4CC9F0).copy(alpha = 0.92f),
+            start = Offset(px, 0f),
+            end = Offset(px, size.height),
+            strokeWidth = 2.4f,
+            pathEffect = if (vx == 0.50f) null else dashEffect,
+          )
+        }
+        snap.snappedHorizontalY?.let { hy ->
+          val py = hy * size.height
+          drawLine(
+            color = Color(0xFFEE7E70).copy(alpha = 0.92f),
+            start = Offset(0f, py),
+            end = Offset(size.width, py),
+            strokeWidth = 2.4f,
+            pathEffect = if (hy == 0.50f) null else dashEffect,
+          )
+        }
+      }
+    }
+
+    // Floating Gesture HUD Pill (Snap Guide label or Pinch Scale readout)
+    val gestureBadge = pinchBadgeText ?: activeSnapState?.snapLabel?.let { "Snapped: $it" }
+    if (gestureBadge != null) {
+      Surface(
+        color = StudioObsidian.copy(alpha = 0.86f),
+        shape = CircleShape,
+        modifier =
+          Modifier.align(Alignment.TopCenter)
+            .padding(top = 12.dp)
+            .testTag("canvas_gesture_hud_badge"),
+      ) {
+        Text(
+          text = gestureBadge,
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.SemiBold,
+          color = Color(0xFF4CC9F0),
+          maxLines = 1,
+          softWrap = false,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
       }
     }

@@ -27,6 +27,8 @@ import com.example.captionstudio.domain.model.FontRoleOverrides
 import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.HookPacingTemplate
+import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
@@ -236,6 +238,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   // Undo / Redo history stacks
   private val undoStack = ArrayDeque<CaptionProject>()
   private val redoStack = ArrayDeque<CaptionProject>()
+  private var pendingPinchSnapshot: CaptionProject? = null
   private val _canUndo = MutableStateFlow(false)
   val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
   private val _canRedo = MutableStateFlow(false)
@@ -1279,6 +1282,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                   motionEffect = patch.motionEffect ?: el.motionEffect,
                   motionSpeed = (patch.motionSpeed ?: el.motionSpeed).coerceIn(0.4f, 2.2f),
                   motionIntensity = (patch.motionIntensity ?: el.motionIntensity).coerceIn(0.25f, 2.0f),
+                  karaokeMode = patch.karaokeMode ?: el.karaokeMode,
+                  karaokeHighlightColorHex = patch.karaokeHighlightColorHex ?: el.karaokeHighlightColorHex,
+                  karaokePillColorHex =
+                    when {
+                      patch.clearKaraokePill -> null
+                      patch.karaokePillColorHex != null -> patch.karaokePillColorHex
+                      else -> el.karaokePillColorHex
+                    },
                 )
               }
             }
@@ -1377,6 +1388,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     motionEffect = LayerMotionEffect.NONE,
                     motionSpeed = 1.0f,
                     motionIntensity = 1.0f,
+                    karaokeMode = preset.defaultKaraokeMode,
+                    karaokeHighlightColorHex = preset.dominantColorHex,
+                    karaokePillColorHex = preset.backgroundPillColorHex,
                   )
                 }
               }
@@ -1806,6 +1820,138 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         )
       }
     commitMutation(project.copy(compositions = updated), recordHistory = false)
+  }
+
+  /**
+   * Two-finger pinch-to-resize on the live video stage.
+   * Captures a single pre-pinch snapshot so Undo cleanly reverts the entire pinch gesture.
+   */
+  fun scaleCompositionElements(
+    compId: String,
+    scaleDelta: Float,
+    recordHistory: Boolean = false,
+  ) {
+    val project = _activeProject.value ?: return
+    if (!recordHistory) {
+      if (pendingPinchSnapshot == null) {
+        pendingPinchSnapshot = project
+      }
+      val safeFactor = scaleDelta.coerceIn(0.82f, 1.22f)
+      val updated =
+        project.compositions.map { comp ->
+          if (comp.id != compId) comp
+          else {
+            comp.copy(
+              elements =
+                comp.elements.map { el ->
+                  el.copy(fontSizeSp = (el.fontSizeSp * safeFactor).coerceIn(12f, 74f))
+                }
+            )
+          }
+        }
+      commitMutation(project.copy(compositions = updated), recordHistory = false)
+    } else {
+      val snapshot = pendingPinchSnapshot
+      pendingPinchSnapshot = null
+      if (snapshot != null && snapshot != project) {
+        undoStack.addLast(snapshot)
+        while (undoStack.size > 40) undoStack.removeFirst()
+        redoStack.clear()
+        _canUndo.value = undoStack.isNotEmpty()
+        _canRedo.value = false
+      }
+      val updated =
+        if (scaleDelta == 1f) {
+          project.compositions
+        } else {
+          val safeFactor = scaleDelta.coerceIn(0.82f, 1.22f)
+          project.compositions.map { comp ->
+            if (comp.id != compId) comp
+            else {
+              comp.copy(
+                elements =
+                  comp.elements.map { el ->
+                    el.copy(fontSizeSp = (el.fontSizeSp * safeFactor).coerceIn(12f, 74f))
+                  }
+              )
+            }
+          }
+        }
+      commitMutation(project.copy(compositions = updated), recordHistory = false)
+    }
+  }
+
+  /**
+   * Batch Hook & B-Roll Pacing Template:
+   * Automatically styles opening 0–3s hook captions with bold kinetic punch and body captions
+   * with clean retention-friendly pacing, preserving exact transcript and word timings.
+   */
+  fun applyHookPacingTemplate(template: HookPacingTemplate) {
+    val project = _activeProject.value ?: return
+    if (project.compositions.isEmpty()) {
+      _statusBanner.value = "Generate or transcribe captions first to apply Hook Pacing."
+      return
+    }
+    val preset = PresetCatalog.findById(project.presetId)
+    val result =
+      LocalCompositionEngine.applyHookPacingTemplate(
+        compositions = project.compositions,
+        template = template,
+        activePreset = preset,
+        analysisReport = project.analysisReport,
+        fontOverrides = project.fontOverrides,
+      )
+    val validated =
+      CompositionValidator.validateAndRepair(
+        context = getApplication(),
+        compositions = result.compositions,
+        videoWidthPx = project.metadata.effectiveWidth,
+        videoHeightPx = project.metadata.effectiveHeight,
+      )
+    commitMutation(project.copy(compositions = validated), recordHistory = true)
+    _statusBanner.value =
+      if (template == HookPacingTemplate.UNIFORM_RESET) {
+        "Reset all ${validated.size} captions evenly to ${preset.name}."
+      } else {
+        "Applied ${template.title}: ${result.hookCount} hook + ${result.bodyCount} body captions."
+      }
+  }
+
+  /**
+   * One-tap Active-Word Karaoke mode toggle across all captions in the active project.
+   */
+  fun setAllKaraokeMode(mode: KaraokeHighlightMode, highlightHex: String? = null) {
+    val project = _activeProject.value ?: return
+    if (project.compositions.isEmpty()) return
+    val preset = PresetCatalog.findById(project.presetId)
+    val chosenHighlight =
+      highlightHex
+        ?: preset.dominantColorHex.takeIf { it != StudioPalette.WHITE }
+        ?: StudioPalette.YELLOW
+    val chosenPill =
+      when (mode) {
+        KaraokeHighlightMode.PILL_SWEEP ->
+          preset.expressiveColorHex.takeIf { it != StudioPalette.WHITE } ?: "#FF5A36"
+        KaraokeHighlightMode.UNDERLINE_SWEEP -> chosenHighlight
+        else -> null
+      }
+    val updated =
+      project.compositions.map { comp ->
+        comp.copy(
+          elements =
+            comp.elements.map { el ->
+              el.copy(
+                karaokeMode = mode,
+                karaokeHighlightColorHex = chosenHighlight,
+                karaokePillColorHex = chosenPill ?: el.karaokePillColorHex,
+              )
+            }
+        )
+      }
+    commitMutation(project.copy(compositions = updated), recordHistory = true)
+    _statusBanner.value =
+      if (mode == KaraokeHighlightMode.OFF) "Active-word karaoke disabled."
+      else "Active-word karaoke: ${mode.label}"
   }
 
   private fun resolveEffectiveWordTimings(project: CaptionProject): List<WordTiming> {
