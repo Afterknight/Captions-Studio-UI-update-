@@ -74,6 +74,9 @@ class SettingsRepository(private val context: Context) {
   val isCreatorMode: Flow<Boolean> =
     context.studioDataStore.data.map { prefs -> prefs[KEY_CREATOR_MODE] ?: true }
 
+  val isProUnlocked: Flow<Boolean> =
+    context.studioDataStore.data.map { prefs -> prefs[KEY_PRO_UNLOCKED] ?: false }
+
   suspend fun saveCustomPreset(preset: com.example.captionstudio.domain.model.PresetDefinition) {
     context.studioDataStore.edit { prefs ->
       val existing =
@@ -103,6 +106,10 @@ class SettingsRepository(private val context: Context) {
 
   suspend fun setCreatorMode(enabled: Boolean) {
     context.studioDataStore.edit { it[KEY_CREATOR_MODE] = enabled }
+  }
+
+  suspend fun setProUnlocked(unlocked: Boolean) {
+    context.studioDataStore.edit { it[KEY_PRO_UNLOCKED] = unlocked }
   }
 
   suspend fun setGeminiEnabled(enabled: Boolean) {
@@ -186,5 +193,6 @@ class SettingsRepository(private val context: Context) {
     private val KEY_SPEECH_LANG = stringPreferencesKey("speech_language_tag")
     private val KEY_CUSTOM_PRESETS = stringPreferencesKey("custom_cloned_presets")
     private val KEY_CREATOR_MODE = booleanPreferencesKey("editor_creator_mode")
+    private val KEY_PRO_UNLOCKED = booleanPreferencesKey("is_pro_unlocked")
   }
 }

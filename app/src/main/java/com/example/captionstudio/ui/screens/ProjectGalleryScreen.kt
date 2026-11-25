@@ -67,6 +67,7 @@ import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ProjectSortOption
 import com.example.captionstudio.ui.components.StudioAmbientBackdrop
 import com.example.captionstudio.ui.components.StudioBrandMark
+import com.example.captionstudio.ui.components.StudioProTopBarPill
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioObsidian
@@ -90,6 +91,8 @@ fun ProjectGalleryScreen(
   isRefreshing: Boolean,
   thumbnailRefreshKey: Int,
   isBusy: Boolean,
+  isProUnlocked: Boolean = false,
+  onOpenProSheet: () -> Unit = {},
   onSearchQueryChange: (String) -> Unit,
   onSortOptionChange: (ProjectSortOption) -> Unit,
   onRefreshProjects: () -> Unit,
@@ -189,6 +192,11 @@ fun ProjectGalleryScreen(
                 )
               }
             }
+
+            StudioProTopBarPill(
+              isProUnlocked = isProUnlocked,
+              onClick = onOpenProSheet,
+            )
           }
 
           GallerySearchBar(

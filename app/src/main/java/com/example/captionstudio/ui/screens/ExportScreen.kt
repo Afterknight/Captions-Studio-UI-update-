@@ -38,7 +38,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -78,6 +77,9 @@ import com.example.captionstudio.ui.components.ExportedVideoReviewPlayer
 import com.example.captionstudio.ui.components.StudioCoralPillButton
 import com.example.captionstudio.ui.components.StudioGlassCard
 import com.example.captionstudio.ui.components.StudioMinimalTopBar
+import com.example.captionstudio.ui.components.StudioProTopBarPill
+import com.example.captionstudio.ui.components.StudioSubtlePill
+import com.example.captionstudio.ui.components.StudioTaskProgressPill
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioCoralContainer
 import com.example.ui.theme.StudioCoralLight
@@ -91,6 +93,8 @@ import com.example.ui.theme.StudioTextSecondary
 fun ExportScreen(
   project: CaptionProject?,
   exportState: ExportUiState,
+  isProUnlocked: Boolean = false,
+  onOpenProSheet: () -> Unit = {},
   onUpdatePreferences: (ExportPreferences) -> Unit,
   onStartExport: () -> Unit,
   onCancelExport: () -> Unit,
@@ -143,6 +147,12 @@ fun ExportScreen(
         subtitle = project?.title,
         onBack = onBack,
         backButtonTag = "export_back_button",
+        trailingContent = {
+          StudioProTopBarPill(
+            isProUnlocked = isProUnlocked,
+            onClick = onOpenProSheet,
+          )
+        },
       )
     },
   ) { innerPadding ->
@@ -232,6 +242,7 @@ fun ExportScreen(
                     onClick = { onUpdatePreferences(prefs.copy(aspectRatio = ar)) },
                     shape = CircleShape,
                     colors = chipColors,
+                    modifier = Modifier.heightIn(min = 48.dp),
                     label = { Text(ar.label, maxLines = 1, softWrap = false) },
                   )
                 }
@@ -248,6 +259,7 @@ fun ExportScreen(
                     onClick = { onUpdatePreferences(prefs.copy(resolution = res)) },
                     shape = CircleShape,
                     colors = chipColors,
+                    modifier = Modifier.heightIn(min = 48.dp),
                     label = { Text(res.label, maxLines = 1, softWrap = false) },
                   )
                 }
@@ -264,6 +276,7 @@ fun ExportScreen(
                     onClick = { onUpdatePreferences(prefs.copy(frameRate = fr)) },
                     shape = CircleShape,
                     colors = chipColors,
+                    modifier = Modifier.heightIn(min = 48.dp),
                     label = { Text(fr.label, maxLines = 1, softWrap = false) },
                   )
                 }
@@ -280,31 +293,57 @@ fun ExportScreen(
                     onClick = { onUpdatePreferences(prefs.copy(qualityMode = q)) },
                     shape = CircleShape,
                     colors = chipColors,
+                    modifier = Modifier.heightIn(min = 48.dp),
                     label = { Text("${q.label} (${q.bitrateMbps} Mbps)", maxLines = 1, softWrap = false) },
                   )
                 }
               }
 
+              val effectiveShowWatermark = if (isProUnlocked) prefs.showWatermark else true
               Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
               ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Column(
+                  modifier = Modifier.weight(1f).padding(end = 12.dp),
+                  verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    Text(
+                      text = stringResource(R.string.export_watermark_title),
+                      style = MaterialTheme.typography.titleSmall,
+                      color = StudioTextPrimary,
+                    )
+                    if (!isProUnlocked) {
+                      StudioSubtlePill(
+                        text = stringResource(R.string.pro_pill_label),
+                        tint = StudioCoralLight,
+                      )
+                    }
+                  }
                   Text(
-                    text = stringResource(R.string.export_watermark_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = StudioTextPrimary,
-                  )
-                  Text(
-                    text = stringResource(R.string.export_watermark_subtitle),
+                    text =
+                      stringResource(
+                        if (isProUnlocked) R.string.export_watermark_subtitle_pro
+                        else R.string.export_watermark_subtitle_free
+                      ),
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioTextSecondary,
                   )
                 }
                 Switch(
-                  checked = prefs.showWatermark,
-                  onCheckedChange = { onUpdatePreferences(prefs.copy(showWatermark = it)) },
+                  checked = effectiveShowWatermark,
+                  onCheckedChange = { checked ->
+                    if (!checked && !isProUnlocked) {
+                      onOpenProSheet()
+                    } else {
+                      onUpdatePreferences(prefs.copy(showWatermark = checked))
+                    }
+                  },
                   colors = SwitchDefaults.colors(checkedTrackColor = StudioCoral),
                   modifier = Modifier.testTag("export_watermark_switch"),
                 )
@@ -336,45 +375,17 @@ fun ExportScreen(
             }
 
             is ExportUiState.Exporting -> {
-              StudioGlassCard(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 22.dp,
-                borderColor = StudioCoral.copy(alpha = 0.6f),
-              ) {
-                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                  ) {
-                    Text(
-                      exportState.stageLabel,
-                      color = StudioTextPrimary,
-                      style = MaterialTheme.typography.titleSmall,
-                      modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("${exportState.progressPercent}%", color = StudioCoralLight, fontWeight = FontWeight.SemiBold)
-                  }
-                  LinearProgressIndicator(
-                    progress = { exportState.progressPercent / 100f },
-                    color = StudioCoral,
-                    trackColor = StudioObsidian,
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
-                  )
-                  Text(
-                    text = stringResource(R.string.export_background_safe_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = StudioTextSecondary,
-                  )
-                  OutlinedButton(
-                    onClick = onCancelExport,
-                    shape = CircleShape,
-                    modifier = Modifier.fillMaxWidth().height(46.dp).testTag("cancel_export_button"),
-                  ) {
-                    Text("Cancel Export", color = StudioTextPrimary)
-                  }
-                }
-              }
+              StudioTaskProgressPill(
+                stepLabel =
+                  exportState.stageLabel.ifBlank {
+                    "Rendering ${prefs.resolution.label} MP4..."
+                  },
+                progressFraction = exportState.progressPercent / 100f,
+                subtitle = stringResource(R.string.export_background_safe_hint),
+                onCancel = onCancelExport,
+                cancelContentDescription = "Cancel export",
+                cancelButtonTag = "cancel_export_button",
+              )
             }
 
             is ExportUiState.Completed -> {

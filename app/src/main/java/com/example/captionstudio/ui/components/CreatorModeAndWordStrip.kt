@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +46,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -185,11 +187,12 @@ fun CreatorModeQuickPanel(
               color = if (isChosen) StudioCoralContainer else StudioElevated,
               shape = CircleShape,
               modifier =
-                Modifier.heightIn(min = 38.dp)
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .minimumInteractiveComponentSize()
                   .border(1.dp, if (isChosen) StudioCoral else StudioHairline, CircleShape)
                   .testTag("creator_style_filter_$key"),
             ) {
-              Box(modifier = Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+              Box(modifier = Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
                 Text(
                   text = label,
                   style = MaterialTheme.typography.labelMedium,
@@ -362,12 +365,13 @@ fun CreatorModeQuickPanel(
                 color = if (isChosen) StudioCoralContainer else StudioElevated,
                 shape = CircleShape,
                 modifier =
-                  Modifier.heightIn(min = 42.dp)
+                  Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .minimumInteractiveComponentSize()
                     .border(1.dp, if (isChosen) StudioCoral else StudioHairline, CircleShape)
                     .testTag("creator_karaoke_${mode.name.lowercase()}"),
               ) {
                 Box(
-                  modifier = Modifier.padding(horizontal = 12.dp),
+                  modifier = Modifier.padding(horizontal = 14.dp),
                   contentAlignment = Alignment.Center,
                 ) {
                   Text(
@@ -623,8 +627,8 @@ fun DescriptWordTapStrip(
       } else {
         FlowRow(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
           wordTimings.take(48).forEachIndexed { idx, wt ->
             val isSpeakingNow = playheadMs in wt.startMs..wt.endMs
@@ -641,24 +645,31 @@ fun DescriptWordTapStrip(
                 isHero -> StudioCoral.copy(alpha = 0.65f)
                 else -> StudioHairline
               }
-            Surface(
-              onClick = {
-                onSeekWord(wt.startMs)
-                editingWordIdx = idx
-              },
-              color = bgColor,
-              shape = RoundedCornerShape(10.dp),
+            Box(
               modifier =
-                Modifier.border(1.dp, borderColor, RoundedCornerShape(10.dp))
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .minimumInteractiveComponentSize()
+                  .clip(RoundedCornerShape(12.dp))
+                  .clickable {
+                    onSeekWord(wt.startMs)
+                    editingWordIdx = idx
+                  }
                   .testTag("descript_word_chip_$idx"),
+              contentAlignment = Alignment.Center,
             ) {
-              Text(
-                text = wt.word,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSpeakingNow || isHero) FontWeight.Bold else FontWeight.Medium,
-                color = if (isSpeakingNow) Color.White else StudioTextPrimary,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-              )
+              Surface(
+                color = bgColor,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.border(1.dp, borderColor, RoundedCornerShape(10.dp)),
+              ) {
+                Text(
+                  text = wt.word,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isSpeakingNow || isHero) FontWeight.Bold else FontWeight.Medium,
+                  color = if (isSpeakingNow) Color.White else StudioTextPrimary,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                )
+              }
             }
           }
         }
@@ -727,6 +738,7 @@ fun DescriptWordTapStrip(
                 onClick = { selectedLevel = HierarchyLevel.SUPPORTING },
                 shape = CircleShape,
                 colors = chipColors,
+                modifier = Modifier.heightIn(min = 48.dp),
                 label = { Text("Normal", maxLines = 1, softWrap = false) },
               )
               FilterChip(
@@ -734,6 +746,7 @@ fun DescriptWordTapStrip(
                 onClick = { selectedLevel = HierarchyLevel.DOMINANT },
                 shape = CircleShape,
                 colors = chipColors,
+                modifier = Modifier.heightIn(min = 48.dp),
                 label = { Text("Hero", maxLines = 1, softWrap = false) },
               )
               FilterChip(
@@ -741,6 +754,7 @@ fun DescriptWordTapStrip(
                 onClick = { selectedLevel = HierarchyLevel.EXPRESSIVE },
                 shape = CircleShape,
                 colors = chipColors,
+                modifier = Modifier.heightIn(min = 48.dp),
                 label = { Text("Accent", maxLines = 1, softWrap = false) },
               )
             }
@@ -750,6 +764,7 @@ fun DescriptWordTapStrip(
               onClick = { behindSubject = !behindSubject },
               shape = CircleShape,
               colors = chipColors,
+              modifier = Modifier.heightIn(min = 48.dp),
               leadingIcon = {
                 Icon(Icons.Filled.Layers, contentDescription = null, modifier = Modifier.size(16.dp))
               },
@@ -768,7 +783,7 @@ fun DescriptWordTapStrip(
             },
             shape = CircleShape,
             colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-            modifier = Modifier.testTag("descript_word_save_button"),
+            modifier = Modifier.heightIn(min = 48.dp).testTag("descript_word_save_button"),
           ) {
             Text("Apply", fontWeight = FontWeight.SemiBold)
           }
@@ -779,7 +794,8 @@ fun DescriptWordTapStrip(
               onClick = {
                 onDeleteWord(idx)
                 editingWordIdx = null
-              }
+              },
+              modifier = Modifier.heightIn(min = 48.dp),
             ) {
               Icon(
                 Icons.Filled.DeleteOutline,
@@ -790,7 +806,10 @@ fun DescriptWordTapStrip(
               Spacer(Modifier.width(4.dp))
               Text("Remove", color = StudioError)
             }
-            TextButton(onClick = { editingWordIdx = null }) {
+            TextButton(
+              onClick = { editingWordIdx = null },
+              modifier = Modifier.heightIn(min = 48.dp),
+            ) {
               Text("Cancel", color = StudioTextSecondary)
             }
           }
@@ -831,7 +850,7 @@ private fun CreatorMacroSlider(
           activeTrackColor = StudioCoral,
           inactiveTrackColor = StudioObsidian,
         ),
-      modifier = Modifier.height(28.dp),
+      modifier = Modifier.heightIn(min = 48.dp),
     )
   }
 }

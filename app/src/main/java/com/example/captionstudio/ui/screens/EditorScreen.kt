@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -78,6 +79,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -116,13 +118,17 @@ import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.media.AutoTranscribeUiState
+import com.example.captionstudio.media.ExportUiState
 import com.example.captionstudio.media.OfflineVoicePackStatus
 import com.example.captionstudio.media.SpeechRecognitionState
 import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.typography.CuratedFontPairing
+import com.example.captionstudio.ui.BackgroundTaskHudState
 import com.example.captionstudio.ui.components.CreatorModeQuickPanel
 import com.example.captionstudio.ui.components.KineticPreviewStage
 import com.example.captionstudio.ui.components.StudioCircleIconButton
+import com.example.captionstudio.ui.components.StudioProTopBarPill
+import com.example.captionstudio.ui.components.StudioTaskProgressPill
 import com.example.captionstudio.ui.components.studioPressScale
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
@@ -158,6 +164,13 @@ fun EditorScreen(
   previewQualityMode: PreviewQualityMode,
   speechState: SpeechRecognitionState,
   autoTranscribeState: AutoTranscribeUiState,
+  backgroundTaskState: BackgroundTaskHudState = BackgroundTaskHudState(),
+  exportState: ExportUiState = ExportUiState.Idle,
+  isProUnlocked: Boolean = false,
+  onOpenProSheet: () -> Unit = {},
+  onCancelAutoTranscribe: () -> Unit = {},
+  onCancelBackgroundTask: () -> Unit = {},
+  onCancelExport: () -> Unit = {},
   onClearBanner: () -> Unit,
   onToggleSafeGuides: () -> Unit,
   onAttachVideo: (Uri) -> Unit,
@@ -284,6 +297,8 @@ fun EditorScreen(
     },
     topBar = {
       EditorMinimalTopBar(
+        isProUnlocked = isProUnlocked,
+        onOpenProSheet = onOpenProSheet,
         onBack = onBack,
         onOpenExport = onOpenExport,
       )
@@ -325,135 +340,87 @@ fun EditorScreen(
             modifier = Modifier.fillMaxHeight(),
           )
 
-          // Top-left discreet glass utility pill: Undo | Redo | Speed | Mute
+          // Top-left discreet glass utility pills with strict 48dp x 48dp touch areas: Undo | Redo | Mute
           Row(
-            modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Surface(
-              color = Color.Black.copy(alpha = 0.54f),
-              shape = CircleShape,
-              modifier = Modifier.border(1.dp, StudioHairline, CircleShape),
-            ) {
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                  onClick = onUndo,
-                  enabled = canUndo,
-                  modifier = Modifier.size(36.dp).testTag("undo_button"),
-                ) {
-                  Icon(
-                    Icons.AutoMirrored.Filled.Undo,
-                    contentDescription = "Undo",
-                    tint = if (canUndo) Color.White else Color.White.copy(alpha = 0.30f),
-                    modifier = Modifier.size(16.dp),
-                  )
-                }
-                IconButton(
-                  onClick = onRedo,
-                  enabled = canRedo,
-                  modifier = Modifier.size(36.dp).testTag("redo_button"),
-                ) {
-                  Icon(
-                    Icons.AutoMirrored.Filled.Redo,
-                    contentDescription = "Redo",
-                    tint = if (canRedo) Color.White else Color.White.copy(alpha = 0.30f),
-                    modifier = Modifier.size(16.dp),
-                  )
-                }
-              }
-            }
-
-            Surface(
-              color = Color.Black.copy(alpha = 0.54f),
-              shape = CircleShape,
-              modifier =
-                Modifier.border(1.dp, StudioHairline, CircleShape)
-                  .clickable {
-                    playbackSpeed =
-                      when (playbackSpeed) {
-                        1.0f -> 1.25f
-                        1.25f -> 1.5f
-                        1.5f -> 0.5f
-                        else -> 1.0f
-                      }
-                  }
-                  .testTag("playback_speed_button"),
-            ) {
-              Text(
-                text = "${playbackSpeed}x",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White,
-                maxLines = 1,
-                softWrap = false,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-              )
-            }
-
-            Surface(
-              color = Color.Black.copy(alpha = 0.54f),
-              shape = CircleShape,
-              modifier =
-                Modifier.size(34.dp)
-                  .border(1.dp, StudioHairline, CircleShape)
-                  .clickable { isMuted = !isMuted }
-                  .testTag("mute_toggle_button"),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                  contentDescription = if (isMuted) "Unmute video" else "Mute video",
-                  tint = if (isMuted) StudioCoral else Color.White,
-                  modifier = Modifier.size(16.dp),
-                )
-              }
-            }
+            StageOverlayIconPill(
+              icon = Icons.AutoMirrored.Filled.Undo,
+              contentDescription = "Undo",
+              tint = if (canUndo) Color.White else Color.White.copy(alpha = 0.30f),
+              enabled = canUndo,
+              onClick = onUndo,
+              modifier = Modifier.testTag("undo_button"),
+            )
+            StageOverlayIconPill(
+              icon = Icons.AutoMirrored.Filled.Redo,
+              contentDescription = "Redo",
+              tint = if (canRedo) Color.White else Color.White.copy(alpha = 0.30f),
+              enabled = canRedo,
+              onClick = onRedo,
+              modifier = Modifier.testTag("redo_button"),
+            )
+            StageOverlayIconPill(
+              icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+              contentDescription = if (isMuted) "Unmute video" else "Mute video",
+              tint = if (isMuted) StudioCoral else Color.White,
+              onClick = { isMuted = !isMuted },
+              modifier = Modifier.testTag("mute_toggle_button"),
+            )
           }
 
-          // Top-right discreet glass utility pills: Guides, Fullscreen, Video
+          // Top-right discreet glass utility pills with strict 48dp x 48dp touch areas: Guides, Fullscreen, Video
           Row(
-            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Surface(
-              color = Color.Black.copy(alpha = 0.56f),
-              shape = CircleShape,
+            Box(
               modifier =
-                Modifier.height(34.dp)
-                  .border(
-                    1.dp,
-                    if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoral.copy(alpha = 0.65f)
-                    else StudioHairline,
-                    CircleShape,
-                  )
-                  .clickable {
-                    onCycleSafeZone()
-                  }
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .minimumInteractiveComponentSize()
+                  .clip(CircleShape)
+                  .clickable { onCycleSafeZone() }
                   .testTag("safe_zone_cycle_button"),
+              contentAlignment = Alignment.Center,
             ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(horizontal = if (safeZonePlatform != SafeZonePlatform.NONE) 8.dp else 8.dp),
+              Surface(
+                color = Color.Black.copy(alpha = 0.56f),
+                shape = CircleShape,
+                modifier =
+                  Modifier.height(34.dp)
+                    .border(
+                      1.dp,
+                      if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoral.copy(alpha = 0.65f)
+                      else StudioHairline,
+                      CircleShape,
+                    ),
               ) {
-                Icon(
-                  imageVector = Icons.Filled.GridOn,
-                  contentDescription = "Cycle safe-zone overlays",
-                  tint =
-                    if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoralLight
-                    else Color.White,
-                  modifier = Modifier.size(15.dp),
-                )
-                if (safeZonePlatform != SafeZonePlatform.NONE) {
-                  Text(
-                    text = safeZonePlatform.shortLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = StudioCoralLight,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    softWrap = false,
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  modifier = Modifier.padding(horizontal = 9.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Filled.GridOn,
+                    contentDescription = "Cycle safe-zone overlays",
+                    tint =
+                      if (safeZonePlatform != SafeZonePlatform.NONE || showSafeGuides) StudioCoralLight
+                      else Color.White,
+                    modifier = Modifier.size(15.dp),
                   )
+                  if (safeZonePlatform != SafeZonePlatform.NONE) {
+                    Text(
+                      text = safeZonePlatform.shortLabel,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = StudioCoralLight,
+                      fontWeight = FontWeight.SemiBold,
+                      maxLines = 1,
+                      softWrap = false,
+                    )
+                  }
                 }
               }
             }
@@ -476,23 +443,23 @@ fun EditorScreen(
             )
           }
 
-          // Integrated Minimal Bottom Scrubber Overlay matching mockup
+          // Integrated Minimal Bottom Scrubber Overlay with 48dp Play, Speed, and Slider controls
           Row(
             modifier =
               Modifier.align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(
                   Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.74f))
                   )
                 )
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
           ) {
             IconButton(
               onClick = { isPlaying = !isPlaying },
-              modifier = Modifier.size(40.dp).testTag("play_pause_button"),
+              modifier = Modifier.size(48.dp).testTag("play_pause_button"),
             ) {
               Icon(
                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
@@ -500,6 +467,39 @@ fun EditorScreen(
                 tint = Color.White,
                 modifier = Modifier.size(22.dp),
               )
+            }
+
+            Box(
+              modifier =
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .minimumInteractiveComponentSize()
+                  .clip(CircleShape)
+                  .clickable {
+                    playbackSpeed =
+                      when (playbackSpeed) {
+                        1.0f -> 1.25f
+                        1.25f -> 1.5f
+                        1.5f -> 0.5f
+                        else -> 1.0f
+                      }
+                  }
+                  .testTag("playback_speed_button"),
+              contentAlignment = Alignment.Center,
+            ) {
+              Surface(
+                color = Color.Black.copy(alpha = 0.54f),
+                shape = CircleShape,
+                modifier = Modifier.border(1.dp, StudioHairline, CircleShape),
+              ) {
+                Text(
+                  text = "${playbackSpeed}x",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color.White,
+                  maxLines = 1,
+                  softWrap = false,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+              }
             }
 
             Slider(
@@ -515,10 +515,13 @@ fun EditorScreen(
                   activeTrackColor = Color.White,
                   inactiveTrackColor = Color.White.copy(alpha = 0.24f),
                 ),
-              modifier = Modifier.weight(1f).height(26.dp),
+              modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.padding(end = 6.dp),
+            ) {
               Text(
                 text = formatEditorTimecode(playheadMs),
                 style = MaterialTheme.typography.labelMedium,
@@ -540,41 +543,47 @@ fun EditorScreen(
           modifier = mod,
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-          // Live Auto-Transcription Progress Banner (only visible while running)
-          AnimatedVisibility(visible = autoTranscribeState.isRunning) {
-            Row(
-              modifier =
-                Modifier.fillMaxWidth()
-                  .clip(RoundedCornerShape(16.dp))
-                  .background(StudioCard)
-                  .border(1.dp, StudioCoral.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-                  .padding(horizontal = 14.dp, vertical = 10.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-              CircularProgressIndicator(
-                color = StudioCoral,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(16.dp),
-              )
-              Text(
-                text = autoTranscribeState.stageLabel.ifBlank { "Transcribing audio..." },
-                style = MaterialTheme.typography.labelMedium,
-                color = StudioTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-              )
-              Text(
-                text = "${(autoTranscribeState.progressFraction * 100).toInt()}%",
-                style = MaterialTheme.typography.labelMedium,
-                color = StudioCoralLight,
-                fontWeight = FontWeight.SemiBold,
-              )
+          // Unified Non-Blocking Background Progress HUD (Transcribing Audio / Analyzing Scene / Exporting MP4)
+          val hudVisible =
+            autoTranscribeState.isRunning ||
+              backgroundTaskState.isRunning ||
+              exportState is ExportUiState.Exporting
+          AnimatedVisibility(visible = hudVisible) {
+            when {
+              autoTranscribeState.isRunning -> {
+                StudioTaskProgressPill(
+                  stepLabel = autoTranscribeState.stageLabel.ifBlank { "Transcribing speech..." },
+                  progressFraction = autoTranscribeState.progressFraction,
+                  onCancel = onCancelAutoTranscribe,
+                  cancelContentDescription = "Cancel transcription",
+                  cancelButtonTag = "cancel_transcribe_button",
+                )
+              }
+              backgroundTaskState.isRunning -> {
+                StudioTaskProgressPill(
+                  stepLabel = backgroundTaskState.stepLabel.ifBlank { "Analyzing scene..." },
+                  progressFraction = backgroundTaskState.progressFraction,
+                  onCancel = onCancelBackgroundTask,
+                  cancelContentDescription = "Cancel analysis",
+                  cancelButtonTag = "cancel_analysis_button",
+                )
+              }
+              exportState is ExportUiState.Exporting -> {
+                StudioTaskProgressPill(
+                  stepLabel =
+                    exportState.stageLabel.ifBlank {
+                      "Rendering ${project.exportPreferences.resolution.label} MP4..."
+                    },
+                  progressFraction = exportState.progressPercent / 100f,
+                  onCancel = onCancelExport,
+                  cancelContentDescription = "Cancel export",
+                  cancelButtonTag = "cancel_export_button",
+                )
+              }
             }
           }
 
-          // Two Clean Modes: Creator Mode | Pro Inspector
+          // Two Clean Modes: Creator Mode | Pro Inspector (strict 48dp minimum touch targets)
           Row(
             modifier =
               Modifier.fillMaxWidth()
@@ -590,7 +599,8 @@ fun EditorScreen(
               shape = CircleShape,
               modifier =
                 Modifier.weight(1f)
-                  .heightIn(min = 42.dp)
+                  .heightIn(min = 48.dp)
+                  .minimumInteractiveComponentSize()
                   .clip(CircleShape)
                   .clickable { onSetCreatorMode(true) }
                   .testTag("editor_mode_creator"),
@@ -598,12 +608,12 @@ fun EditorScreen(
               Box(contentAlignment = Alignment.Center) {
                 Text(
                   text = "Creator Mode",
-                  style = MaterialTheme.typography.labelMedium,
+                  style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.SemiBold,
                   color = if (isCreatorMode) Color.White else StudioTextSecondary,
                   maxLines = 1,
                   softWrap = false,
-                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
               }
             }
@@ -612,7 +622,8 @@ fun EditorScreen(
               shape = CircleShape,
               modifier =
                 Modifier.weight(1f)
-                  .heightIn(min = 42.dp)
+                  .heightIn(min = 48.dp)
+                  .minimumInteractiveComponentSize()
                   .clip(CircleShape)
                   .clickable { onSetCreatorMode(false) }
                   .testTag("editor_mode_pro"),
@@ -620,12 +631,12 @@ fun EditorScreen(
               Box(contentAlignment = Alignment.Center) {
                 Text(
                   text = "Pro Inspector",
-                  style = MaterialTheme.typography.labelMedium,
+                  style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.SemiBold,
                   color = if (!isCreatorMode) Color.White else StudioTextSecondary,
                   maxLines = 1,
                   softWrap = false,
-                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
               }
             }
@@ -964,7 +975,7 @@ fun EditorScreen(
         ) {
           IconButton(
             onClick = { isPlaying = !isPlaying },
-            modifier = Modifier.size(46.dp).clip(CircleShape).background(StudioCoral),
+            modifier = Modifier.size(48.dp).clip(CircleShape).background(StudioCoral),
           ) {
             Icon(
               if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -985,9 +996,12 @@ fun EditorScreen(
                 activeTrackColor = Color.White,
                 inactiveTrackColor = Color.White.copy(alpha = 0.24f),
               ),
-            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).padding(horizontal = 10.dp),
           )
-          IconButton(onClick = { isMuted = !isMuted }) {
+          IconButton(
+            onClick = { isMuted = !isMuted },
+            modifier = Modifier.size(48.dp),
+          ) {
             Icon(
               if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
               contentDescription = "Mute",
@@ -1039,6 +1053,7 @@ fun EditorScreen(
                     selectedContainerColor = StudioCoralContainer,
                     selectedLabelColor = StudioCoralLight,
                   ),
+                modifier = Modifier.heightIn(min = 48.dp),
                 label = {
                   Text(
                     role.name.lowercase().replaceFirstChar { it.uppercase() },
@@ -1059,12 +1074,16 @@ fun EditorScreen(
           },
           shape = CircleShape,
           colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
+          modifier = Modifier.heightIn(min = 48.dp),
         ) {
           Text("Add", fontWeight = FontWeight.SemiBold)
         }
       },
       dismissButton = {
-        TextButton(onClick = { showAddElementDialog = false }) {
+        TextButton(
+          onClick = { showAddElementDialog = false },
+          modifier = Modifier.heightIn(min = 48.dp),
+        ) {
           Text("Cancel", color = StudioTextSecondary)
         }
       },
@@ -1130,12 +1149,16 @@ fun EditorScreen(
             },
             shape = CircleShape,
             colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
+            modifier = Modifier.heightIn(min = 48.dp),
           ) {
             Text("Save", fontWeight = FontWeight.SemiBold)
           }
         },
         dismissButton = {
-          TextButton(onClick = { editingWordIndex = null }) {
+          TextButton(
+            onClick = { editingWordIndex = null },
+            modifier = Modifier.heightIn(min = 48.dp),
+          ) {
             Text("Cancel", color = StudioTextSecondary)
           }
         },
@@ -1146,21 +1169,25 @@ fun EditorScreen(
 
 @Composable
 private fun EditorMinimalTopBar(
+  isProUnlocked: Boolean,
+  onOpenProSheet: () -> Unit,
   onBack: () -> Unit,
   onOpenExport: () -> Unit,
 ) {
   val exportInteraction = remember { MutableInteractionSource() }
-  Box(
+  Row(
     modifier =
       Modifier.fillMaxWidth()
         .statusBarsPadding()
-        .padding(horizontal = 18.dp, vertical = 10.dp),
+        .padding(horizontal = 14.dp, vertical = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     StudioCircleIconButton(
       icon = Icons.AutoMirrored.Rounded.ArrowBack,
       contentDescription = "Back to Home",
       onClick = onBack,
-      modifier = Modifier.align(Alignment.CenterStart).testTag("editor_back_button"),
+      modifier = Modifier.testTag("editor_back_button"),
     )
 
     Text(
@@ -1170,27 +1197,37 @@ private fun EditorMinimalTopBar(
       fontWeight = FontWeight.SemiBold,
       color = StudioTextPrimary,
       maxLines = 1,
-      modifier = Modifier.align(Alignment.Center),
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
     )
 
-    // Top-right warm coral Export pill matching reference mockup
+    StudioProTopBarPill(
+      isProUnlocked = isProUnlocked,
+      onClick = onOpenProSheet,
+    )
+
+    // Top-right warm coral Export pill with guaranteed 48dp accessible hit area
     Box(
       modifier =
-        Modifier.align(Alignment.CenterEnd)
-          .studioPressScale(interactionSource = exportInteraction)
+        Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+          .minimumInteractiveComponentSize()
           .clip(CircleShape)
-          .background(
-            Brush.horizontalGradient(listOf(StudioCoralLight, StudioCoral))
-          )
           .clickable(
             interactionSource = exportInteraction,
             indication = ripple(bounded = true, color = Color.White),
             onClick = onOpenExport,
           )
-          .padding(horizontal = 16.dp, vertical = 10.dp)
           .testTag("open_export_button"),
+      contentAlignment = Alignment.Center,
     ) {
       Row(
+        modifier =
+          Modifier.studioPressScale(interactionSource = exportInteraction)
+            .clip(CircleShape)
+            .background(
+              Brush.horizontalGradient(listOf(StudioCoralLight, StudioCoral))
+            )
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
       ) {
@@ -1220,23 +1257,32 @@ private fun StageOverlayIconPill(
   tint: Color,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  enabled: Boolean = true,
 ) {
-  Surface(
-    color = Color.Black.copy(alpha = 0.54f),
-    shape = CircleShape,
+  Box(
     modifier =
       modifier
-        .size(34.dp)
-        .border(1.dp, StudioHairline, CircleShape)
-        .clickable(onClick = onClick),
+        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+        .minimumInteractiveComponentSize()
+        .clip(CircleShape)
+        .clickable(enabled = enabled, onClick = onClick),
+    contentAlignment = Alignment.Center,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(
-        imageVector = icon,
-        contentDescription = contentDescription,
-        tint = tint,
-        modifier = Modifier.size(16.dp),
-      )
+    Surface(
+      color = Color.Black.copy(alpha = if (enabled) 0.54f else 0.36f),
+      shape = CircleShape,
+      modifier =
+        Modifier.size(34.dp)
+          .border(1.dp, StudioHairline, CircleShape),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = icon,
+          contentDescription = contentDescription,
+          tint = tint,
+          modifier = Modifier.size(16.dp),
+        )
+      }
     }
   }
 }

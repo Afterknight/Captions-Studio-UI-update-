@@ -57,6 +57,8 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -65,6 +67,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+data class BackgroundTaskHudState(
+  val isRunning: Boolean = false,
+  val stepLabel: String = "",
+  val progressFraction: Float? = null,
+)
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -164,6 +172,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       true,
     )
 
+  val isProUnlocked: StateFlow<Boolean> =
+    settingsRepo.isProUnlocked.stateIn(
+      viewModelScope,
+      SharingStarted.WhileSubscribed(5000),
+      false,
+    )
+
   private val _activeProject = MutableStateFlow<CaptionProject?>(null)
   val activeProject: StateFlow<CaptionProject?> = _activeProject.asStateFlow()
 
@@ -178,6 +193,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private val _isBusy = MutableStateFlow(false)
   val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
+
+  private val _backgroundTaskState = MutableStateFlow(BackgroundTaskHudState())
+  val backgroundTaskState: StateFlow<BackgroundTaskHudState> = _backgroundTaskState.asStateFlow()
+
+  private var activeBackgroundJob: Job? = null
+  private var activeTranscribeJob: Job? = null
 
   private val _statusBanner = MutableStateFlow<String?>(null)
   val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
@@ -231,6 +252,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun setCreatorMode(enabled: Boolean) {
     viewModelScope.launch { settingsRepo.setCreatorMode(enabled) }
+  }
+
+  fun setProUnlocked(unlocked: Boolean) {
+    viewModelScope.launch { settingsRepo.setProUnlocked(unlocked) }
+    val current = _activeProject.value
+    if (!unlocked && current != null && !current.exportPreferences.showWatermark) {
+      commitMutation(
+        current.copy(exportPreferences = current.exportPreferences.copy(showWatermark = true)),
+        recordHistory = false,
+      )
+    }
   }
 
   fun updateGallerySearchQuery(query: String) {
@@ -311,9 +343,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   suspend fun importVideoAndCreateProject(uri: Uri, title: String): String {
     _isBusy.value = true
+    _backgroundTaskState.value =
+      BackgroundTaskHudState(
+        isRunning = true,
+        stepLabel = "Analyzing scene & framing...",
+        progressFraction = 0.25f,
+      )
     return try {
       val ctx = getApplication<Application>()
       val meta = VideoAnalysisService.extractMetadata(ctx, uri)
+      _backgroundTaskState.value =
+        BackgroundTaskHudState(
+          isRunning = true,
+          stepLabel = "Detecting subjects & safe zones...",
+          progressFraction = 0.68f,
+        )
       val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
       val created =
         projectRepo.createProject(
@@ -330,13 +374,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _playheadMs.value = 0L
       _statusBanner.value = analysis.summary
       if (meta.hasAudio) {
-        viewModelScope.launch {
-          runAutoTranscribeInternal(autoCompose = true)
-        }
+        activeTranscribeJob?.cancel()
+        activeTranscribeJob =
+          viewModelScope.launch {
+            runAutoTranscribeInternal(autoCompose = true)
+          }
       }
       created.id
     } finally {
       _isBusy.value = false
+      _backgroundTaskState.value = BackgroundTaskHudState()
     }
   }
 
@@ -395,27 +442,45 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun attachVideoToActiveProject(uri: Uri) {
     val current = _activeProject.value ?: return
-    viewModelScope.launch {
-      _isBusy.value = true
-      try {
-        val ctx = getApplication<Application>()
-        val meta = VideoAnalysisService.extractMetadata(ctx, uri)
-        val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
-        commitMutation(
-          current.copy(
-            videoUriString = uri.toString(),
-            metadata = meta,
-            analysisReport = analysis,
+    activeBackgroundJob?.cancel()
+    activeBackgroundJob =
+      viewModelScope.launch {
+        _isBusy.value = true
+        _backgroundTaskState.value =
+          BackgroundTaskHudState(
+            isRunning = true,
+            stepLabel = "Analyzing scene & framing...",
+            progressFraction = 0.25f,
           )
-        )
-        _statusBanner.value = analysis.summary
-        if (meta.hasAudio && current.transcriptText.isBlank()) {
-          runAutoTranscribeInternal(autoCompose = true)
+        try {
+          val ctx = getApplication<Application>()
+          val meta = VideoAnalysisService.extractMetadata(ctx, uri)
+          _backgroundTaskState.value =
+            BackgroundTaskHudState(
+              isRunning = true,
+              stepLabel = "Detecting subjects & safe zones...",
+              progressFraction = 0.65f,
+            )
+          val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
+          commitMutation(
+            current.copy(
+              videoUriString = uri.toString(),
+              metadata = meta,
+              analysisReport = analysis,
+            )
+          )
+          _statusBanner.value = analysis.summary
+          _backgroundTaskState.value = BackgroundTaskHudState()
+          if (meta.hasAudio && current.transcriptText.isBlank()) {
+            runAutoTranscribeInternal(autoCompose = true)
+          }
+        } catch (_: CancellationException) {
+          _statusBanner.value = "Scene analysis cancelled."
+        } finally {
+          _isBusy.value = false
+          _backgroundTaskState.value = BackgroundTaskHudState()
         }
-      } finally {
-        _isBusy.value = false
       }
-    }
   }
 
   fun renameProject(projectId: String, newTitle: String) {
@@ -622,7 +687,23 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun cancelAutoTranscribe() {
+    activeTranscribeJob?.cancel()
+    activeTranscribeJob = null
     autoTranscriber.cancel()
+    _backgroundTaskState.value = BackgroundTaskHudState()
+    _isBusy.value = false
+    _statusBanner.value = "Transcription cancelled."
+  }
+
+  fun cancelBackgroundTask() {
+    activeBackgroundJob?.cancel()
+    activeBackgroundJob = null
+    activeTranscribeJob?.cancel()
+    activeTranscribeJob = null
+    autoTranscriber.cancel()
+    _backgroundTaskState.value = BackgroundTaskHudState()
+    _isBusy.value = false
+    _statusBanner.value = "Task cancelled."
   }
 
   // --- Composition Generation ---
@@ -642,9 +723,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _statusBanner.value = "Attach a video before running automatic audio transcription."
       return
     }
-    viewModelScope.launch {
-      runAutoTranscribeInternal(autoCompose = true)
-    }
+    activeTranscribeJob?.cancel()
+    activeTranscribeJob =
+      viewModelScope.launch {
+        try {
+          runAutoTranscribeInternal(autoCompose = true)
+        } catch (_: CancellationException) {
+          autoTranscriber.cancel()
+          _backgroundTaskState.value = BackgroundTaskHudState()
+        }
+      }
   }
 
   private suspend fun runAutoTranscribeInternal(autoCompose: Boolean) {
@@ -683,14 +771,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           if (latest.videoUriString.isNotBlank() &&
               (latest.analysisReport.shotAnalyses.isEmpty() || targetSampleTimes.isNotEmpty())
           ) {
-            runCatching {
-              VideoAnalysisService.analyzeLocally(
-                context = getApplication(),
-                videoUri = Uri.parse(latest.videoUriString),
-                metadata = latest.metadata,
-                targetTimestampsMs = targetSampleTimes,
+            _backgroundTaskState.value =
+              BackgroundTaskHudState(
+                isRunning = true,
+                stepLabel = "Analyzing scene & aligning 10ms timings...",
+                progressFraction = 0.86f,
               )
-            }.getOrDefault(latest.analysisReport)
+            try {
+              runCatching {
+                VideoAnalysisService.analyzeLocally(
+                  context = getApplication(),
+                  videoUri = Uri.parse(latest.videoUriString),
+                  metadata = latest.metadata,
+                  targetTimestampsMs = targetSampleTimes,
+                )
+              }.getOrDefault(latest.analysisReport)
+            } finally {
+              _backgroundTaskState.value = BackgroundTaskHudState()
+            }
           } else {
             latest.analysisReport
           }
@@ -754,70 +852,88 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val project = _activeProject.value ?: return
     val preset = PresetCatalog.findById(project.presetId)
 
-    viewModelScope.launch {
-      _isBusy.value = true
-      try {
-        val targetTimes =
-          if (project.wordTimings.isNotEmpty()) {
-            project.wordTimings.chunked(4).map { chunk ->
-              (chunk.first().startMs + chunk.last().endMs) / 2L
+    activeBackgroundJob?.cancel()
+    activeBackgroundJob =
+      viewModelScope.launch {
+        _isBusy.value = true
+        _backgroundTaskState.value =
+          BackgroundTaskHudState(
+            isRunning = true,
+            stepLabel = "Analyzing scene & safe zones...",
+            progressFraction = 0.30f,
+          )
+        try {
+          val targetTimes =
+            if (project.wordTimings.isNotEmpty()) {
+              project.wordTimings.chunked(4).map { chunk ->
+                (chunk.first().startMs + chunk.last().endMs) / 2L
+              }
+            } else {
+              emptyList()
             }
-          } else {
-            emptyList()
-          }
-        val effectiveAnalysis =
-          if (project.videoUriString.isNotBlank() && project.analysisReport.shotAnalyses.isEmpty()) {
-            runCatching {
-              VideoAnalysisService.analyzeLocally(
-                context = getApplication(),
-                videoUri = Uri.parse(project.videoUriString),
-                metadata = project.metadata,
-                targetTimestampsMs = targetTimes,
-              )
-            }.getOrDefault(project.analysisReport)
-          } else {
-            project.analysisReport
-          }
+          val effectiveAnalysis =
+            if (project.videoUriString.isNotBlank() && project.analysisReport.shotAnalyses.isEmpty()) {
+              runCatching {
+                VideoAnalysisService.analyzeLocally(
+                  context = getApplication(),
+                  videoUri = Uri.parse(project.videoUriString),
+                  metadata = project.metadata,
+                  targetTimestampsMs = targetTimes,
+                )
+              }.getOrDefault(project.analysisReport)
+            } else {
+              project.analysisReport
+            }
 
-        val localComps =
-          LocalCompositionEngine.generateCompositions(
-            transcript = project.transcriptText,
-            wordTimings = project.wordTimings,
-            totalDurationMs = project.metadata.durationMs,
-            preset = preset,
-            analysisReport = effectiveAnalysis,
-            fontOverrides = project.fontOverrides,
+          _backgroundTaskState.value =
+            BackgroundTaskHudState(
+              isRunning = true,
+              stepLabel = "Aligning 10ms timings...",
+              progressFraction = 0.72f,
+            )
+
+          val localComps =
+            LocalCompositionEngine.generateCompositions(
+              transcript = project.transcriptText,
+              wordTimings = project.wordTimings,
+              totalDurationMs = project.metadata.durationMs,
+              preset = preset,
+              analysisReport = effectiveAnalysis,
+              fontOverrides = project.fontOverrides,
+            )
+
+          val bannerMsg =
+            if (effectiveAnalysis.shotAnalyses.isNotEmpty()) {
+              "Generated ${localComps.size} frame-aware captions across ${effectiveAnalysis.shotAnalyses.size} shot(s) offline."
+            } else {
+              "Generated ${localComps.size} kinetic captions offline."
+            }
+
+          val validated =
+            CompositionValidator.validateAndRepair(
+              context = getApplication(),
+              compositions = localComps,
+              videoWidthPx = project.metadata.effectiveWidth,
+              videoHeightPx = project.metadata.effectiveHeight,
+            )
+
+          commitMutation(
+            project.copy(
+              analysisReport = effectiveAnalysis,
+              compositions = validated,
+            )
           )
-
-        val bannerMsg =
-          if (effectiveAnalysis.shotAnalyses.isNotEmpty()) {
-            "Generated ${localComps.size} frame-aware captions across ${effectiveAnalysis.shotAnalyses.size} shot(s) offline."
-          } else {
-            "Generated ${localComps.size} kinetic captions offline."
-          }
-
-        val validated =
-          CompositionValidator.validateAndRepair(
-            context = getApplication(),
-            compositions = localComps,
-            videoWidthPx = project.metadata.effectiveWidth,
-            videoHeightPx = project.metadata.effectiveHeight,
-          )
-
-        commitMutation(
-          project.copy(
-            analysisReport = effectiveAnalysis,
-            compositions = validated,
-          )
-        )
-        _selectedCompositionId.value = validated.firstOrNull()?.id
-        _selectedElementId.value = validated.firstOrNull()?.elements?.firstOrNull()?.id
-        _playheadMs.value = validated.firstOrNull()?.startMs ?: 0L
-        _statusBanner.value = bannerMsg
-      } finally {
-        _isBusy.value = false
+          _selectedCompositionId.value = validated.firstOrNull()?.id
+          _selectedElementId.value = validated.firstOrNull()?.elements?.firstOrNull()?.id
+          _playheadMs.value = validated.firstOrNull()?.startMs ?: 0L
+          _statusBanner.value = bannerMsg
+        } catch (_: CancellationException) {
+          _statusBanner.value = "Caption generation cancelled."
+        } finally {
+          _isBusy.value = false
+          _backgroundTaskState.value = BackgroundTaskHudState()
+        }
       }
-    }
   }
 
   // --- Manual Editing ---
@@ -1854,12 +1970,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val project = _activeProject.value ?: return
     val uri =
       if (project.videoUriString.isBlank()) Uri.EMPTY else Uri.parse(project.videoUriString)
+    val effectivePrefs =
+      if (isProUnlocked.value) project.exportPreferences
+      else project.exportPreferences.copy(showWatermark = true)
     VideoExportCoordinator.startForegroundExport(
       context = getApplication(),
       videoUri = uri,
       compositions = project.compositions,
       presetId = project.presetId,
-      exportPrefs = project.exportPreferences,
+      exportPrefs = effectivePrefs,
       outputTitle = project.title,
     )
   }

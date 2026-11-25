@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -149,30 +151,38 @@ fun VisualCaptionTimeline(
           )
         }
         Spacer(Modifier.width(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
           listOf(1f to "1x", 2f to "2x", 4f to "4x").forEach { (z, label) ->
             val selected = zoomFactor == z
-            Surface(
-              onClick = { zoomFactor = z },
-              color = if (selected) StudioCoral else StudioElevated,
-              shape = CircleShape,
+            Box(
               modifier =
-                Modifier.heightIn(min = 34.dp)
-                  .border(1.dp, if (selected) StudioCoralLight else StudioHairline, CircleShape)
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .minimumInteractiveComponentSize()
+                  .clip(CircleShape)
+                  .clickable { zoomFactor = z }
                   .testTag("timeline_zoom_${label}"),
+              contentAlignment = Alignment.Center,
             ) {
-              Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              Surface(
+                color = if (selected) StudioCoral else StudioElevated,
+                shape = CircleShape,
+                modifier =
+                  Modifier.heightIn(min = 32.dp)
+                    .border(1.dp, if (selected) StudioCoralLight else StudioHairline, CircleShape),
               ) {
-                Text(
-                  text = label,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (selected) Color.White else StudioTextSecondary,
-                  maxLines = 1,
-                  softWrap = false,
-                )
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                ) {
+                  Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (selected) Color.White else StudioTextSecondary,
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                }
               }
             }
           }
@@ -279,8 +289,9 @@ fun VisualCaptionTimeline(
             val latestOnTrim by rememberUpdatedState(onTrimComposition)
 
             val startPx = ((draftStartMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(0f, trackWidthPx)
-            val endPx = ((draftEndMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(startPx + 24f, trackWidthPx)
-            val blockWidthDp = with(density) { (endPx - startPx).coerceAtLeast(36f).toDp() }
+            val minBlockWidthPx = with(density) { 48.dp.toPx() }
+            val endPx = ((draftEndMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(startPx + minBlockWidthPx, trackWidthPx)
+            val blockWidthDp = with(density) { (endPx - startPx).coerceAtLeast(minBlockWidthPx).toDp() }
             val blockTopPx = with(density) { 28.dp.toPx() }.roundToInt()
 
             val blockBg =
@@ -314,7 +325,7 @@ fun VisualCaptionTimeline(
               Column(
                 modifier =
                   Modifier.fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
               ) {
                 Row(
@@ -354,49 +365,64 @@ fun VisualCaptionTimeline(
                   softWrap = false,
                 )
               }
+            }
 
-              // Draggable LEFT Trim Handle
+            // Expanded 48dp x 84dp touch hit-area for LEFT trim handle wrapping sleek 22dp visual handle bar
+            val handleTouchWidthPx = with(density) { 48.dp.toPx() }
+            val visualHandleWidthPx = with(density) { 22.dp.toPx() }
+            val padEachSidePx = (handleTouchWidthPx - visualHandleWidthPx) / 2f
+            val leftOutsetPx = min(startPx, padEachSidePx)
+            val leftTouchX = (startPx - leftOutsetPx).roundToInt()
+
+            Box(
+              modifier =
+                Modifier.offset { IntOffset(leftTouchX, blockTopPx) }
+                  .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .width(48.dp)
+                  .height(84.dp)
+                  .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
+                    var accumStartMs = draftStartMs.toFloat()
+                    detectHorizontalDragGestures(
+                      onDragStart = {
+                        accumStartMs = latestDraftStart.toFloat()
+                        onSelectComposition(comp.id)
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      },
+                      onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
+                        accumStartMs += deltaMs
+                        val (clampedStart, clampedEnd) =
+                          clampTrimRange(
+                            proposedStartMs = accumStartMs.toLong(),
+                            proposedEndMs = latestDraftEnd,
+                            totalDurationMs = effectiveDurationMs,
+                            prevCompEndMs = prevEnd,
+                            nextCompStartMs = nextStart,
+                          )
+                        draftStartMs = clampedStart
+                        draftEndMs = clampedEnd
+                        activeTrimReadout = "In: ${formatTimelineSec(clampedStart)}"
+                      },
+                      onDragEnd = {
+                        activeTrimReadout = null
+                        latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
+                      },
+                      onDragCancel = {
+                        activeTrimReadout = null
+                        draftStartMs = comp.startMs
+                        draftEndMs = comp.endMs
+                      },
+                    )
+                  }
+                  .testTag("timeline_trim_left_$idx"),
+            ) {
+              // Sleek 22dp visual trim handle bar aligned flush inside block's left edge
               Box(
                 modifier =
-                  Modifier.align(Alignment.CenterStart)
+                  Modifier.offset { IntOffset(leftOutsetPx.roundToInt(), 0) }
                     .width(22.dp)
-                    .fillMaxHeight()
-                    .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
-                      var accumStartMs = draftStartMs.toFloat()
-                      detectHorizontalDragGestures(
-                        onDragStart = {
-                          accumStartMs = latestDraftStart.toFloat()
-                          onSelectComposition(comp.id)
-                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        },
-                        onHorizontalDrag = { change, dragAmount ->
-                          change.consume()
-                          val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
-                          accumStartMs += deltaMs
-                          val (clampedStart, clampedEnd) =
-                            clampTrimRange(
-                              proposedStartMs = accumStartMs.toLong(),
-                              proposedEndMs = latestDraftEnd,
-                              totalDurationMs = effectiveDurationMs,
-                              prevCompEndMs = prevEnd,
-                              nextCompStartMs = nextStart,
-                            )
-                          draftStartMs = clampedStart
-                          draftEndMs = clampedEnd
-                          activeTrimReadout = "In: ${formatTimelineSec(clampedStart)}"
-                        },
-                        onDragEnd = {
-                          activeTrimReadout = null
-                          latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
-                        },
-                        onDragCancel = {
-                          activeTrimReadout = null
-                          draftStartMs = comp.startMs
-                          draftEndMs = comp.endMs
-                        },
-                      )
-                    }
-                    .testTag("timeline_trim_left_$idx"),
+                    .fillMaxHeight(),
                 contentAlignment = Alignment.Center,
               ) {
                 Box(
@@ -407,49 +433,62 @@ fun VisualCaptionTimeline(
                       .background(if (isSelected) Color.White else StudioCoralLight.copy(alpha = 0.72f)),
                 )
               }
+            }
 
-              // Draggable RIGHT Trim Handle
+            // Expanded 48dp x 84dp touch hit-area for RIGHT trim handle wrapping sleek 22dp visual handle bar
+            val rightOutsetPx = min((trackWidthPx - endPx).coerceAtLeast(0f), padEachSidePx)
+            val rightTouchX = (endPx + rightOutsetPx - handleTouchWidthPx).coerceAtLeast(0f).roundToInt()
+            val rightVisualOffsetPx = (endPx - visualHandleWidthPx - rightTouchX).coerceIn(0f, handleTouchWidthPx - visualHandleWidthPx)
+
+            Box(
+              modifier =
+                Modifier.offset { IntOffset(rightTouchX, blockTopPx) }
+                  .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                  .width(48.dp)
+                  .height(84.dp)
+                  .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
+                    var accumEndMs = draftEndMs.toFloat()
+                    detectHorizontalDragGestures(
+                      onDragStart = {
+                        accumEndMs = latestDraftEnd.toFloat()
+                        onSelectComposition(comp.id)
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      },
+                      onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
+                        accumEndMs += deltaMs
+                        val (clampedStart, clampedEnd) =
+                          clampTrimRange(
+                            proposedStartMs = latestDraftStart,
+                            proposedEndMs = accumEndMs.toLong(),
+                            totalDurationMs = effectiveDurationMs,
+                            prevCompEndMs = prevEnd,
+                            nextCompStartMs = nextStart,
+                          )
+                        draftStartMs = clampedStart
+                        draftEndMs = clampedEnd
+                        activeTrimReadout = "Out: ${formatTimelineSec(clampedEnd)}"
+                      },
+                      onDragEnd = {
+                        activeTrimReadout = null
+                        latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
+                      },
+                      onDragCancel = {
+                        activeTrimReadout = null
+                        draftStartMs = comp.startMs
+                        draftEndMs = comp.endMs
+                      },
+                    )
+                  }
+                  .testTag("timeline_trim_right_$idx"),
+            ) {
+              // Sleek 22dp visual trim handle bar aligned flush inside block's right edge
               Box(
                 modifier =
-                  Modifier.align(Alignment.CenterEnd)
+                  Modifier.offset { IntOffset(rightVisualOffsetPx.roundToInt(), 0) }
                     .width(22.dp)
-                    .fillMaxHeight()
-                    .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
-                      var accumEndMs = draftEndMs.toFloat()
-                      detectHorizontalDragGestures(
-                        onDragStart = {
-                          accumEndMs = latestDraftEnd.toFloat()
-                          onSelectComposition(comp.id)
-                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        },
-                        onHorizontalDrag = { change, dragAmount ->
-                          change.consume()
-                          val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
-                          accumEndMs += deltaMs
-                          val (clampedStart, clampedEnd) =
-                            clampTrimRange(
-                              proposedStartMs = latestDraftStart,
-                              proposedEndMs = accumEndMs.toLong(),
-                              totalDurationMs = effectiveDurationMs,
-                              prevCompEndMs = prevEnd,
-                              nextCompStartMs = nextStart,
-                            )
-                          draftStartMs = clampedStart
-                          draftEndMs = clampedEnd
-                          activeTrimReadout = "Out: ${formatTimelineSec(clampedEnd)}"
-                        },
-                        onDragEnd = {
-                          activeTrimReadout = null
-                          latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
-                        },
-                        onDragCancel = {
-                          activeTrimReadout = null
-                          draftStartMs = comp.startMs
-                          draftEndMs = comp.endMs
-                        },
-                      )
-                    }
-                    .testTag("timeline_trim_right_$idx"),
+                    .fillMaxHeight(),
                 contentAlignment = Alignment.Center,
               ) {
                 Box(

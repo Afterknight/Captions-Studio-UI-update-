@@ -84,6 +84,7 @@ class VideoAutoTranscriber(private val context: Context) {
 
   fun cancel() {
     voskService.cancel()
+    _state.value = _state.value.copy(isRunning = false, stageLabel = "", progressFraction = 0f)
   }
 
   suspend fun transcribeVideo(

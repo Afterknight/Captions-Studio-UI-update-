@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -33,9 +35,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -74,8 +80,11 @@ import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioHairline
 import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
+import com.example.ui.theme.StudioSuccess
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
+import androidx.compose.ui.res.stringResource
+import com.example.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -226,12 +235,9 @@ fun StudioCircleIconButton(
   Box(
     modifier =
       modifier
+        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
         .minimumInteractiveComponentSize()
-        .studioPressScale(enabled = enabled, pressedScale = 0.92f, interactionSource = interactionSource)
-        .size(visualSize)
         .clip(CircleShape)
-        .background(containerColor.copy(alpha = if (enabled) 1f else 0.45f))
-        .border(1.dp, StudioHairline, CircleShape)
         .clickable(
           enabled = enabled,
           interactionSource = interactionSource,
@@ -240,22 +246,32 @@ fun StudioCircleIconButton(
         ),
     contentAlignment = Alignment.Center,
   ) {
-    Icon(
-      imageVector = icon,
-      contentDescription = contentDescription,
-      tint = tint.copy(alpha = if (enabled) 1f else 0.35f),
-      modifier = Modifier.size(20.dp),
-    )
-    if (badgeDotColor != null) {
-      Box(
-        modifier =
-          Modifier.align(Alignment.TopEnd)
-            .padding(top = 8.dp, end = 8.dp)
-            .size(7.dp)
-            .clip(CircleShape)
-            .background(badgeDotColor)
-            .border(1.dp, StudioObsidian, CircleShape)
+    Box(
+      modifier =
+        Modifier.studioPressScale(enabled = enabled, pressedScale = 0.92f, interactionSource = interactionSource)
+          .size(visualSize)
+          .clip(CircleShape)
+          .background(containerColor.copy(alpha = if (enabled) 1f else 0.45f))
+          .border(1.dp, StudioHairline, CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = tint.copy(alpha = if (enabled) 1f else 0.35f),
+        modifier = Modifier.size(20.dp),
       )
+      if (badgeDotColor != null) {
+        Box(
+          modifier =
+            Modifier.align(Alignment.TopEnd)
+              .padding(top = 8.dp, end = 8.dp)
+              .size(7.dp)
+              .clip(CircleShape)
+              .background(badgeDotColor)
+              .border(1.dp, StudioObsidian, CircleShape)
+        )
+      }
     }
   }
 }
@@ -288,7 +304,8 @@ fun StudioCoralPillButton(
     modifier =
       modifier
         .fillMaxWidth()
-        .height(height)
+        .heightIn(min = 48.dp)
+        .height(height.coerceAtLeast(48.dp))
         .studioPressScale(enabled = enabled && !isLoading, interactionSource = interactionSource)
         .clip(CircleShape)
         .background(gradient)
@@ -573,5 +590,224 @@ fun StudioSubtlePill(
       softWrap = false,
       modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
     )
+  }
+}
+
+/**
+ * Unified non-blocking background progress HUD used consistently across Editor and Export
+ * for Audio Transcription, Scene Analysis, and MP4 Rendering.
+ * Features a crisp step label, smooth animated progress indicator, and a 48dp Cancel button.
+ */
+@Composable
+fun StudioTaskProgressPill(
+  stepLabel: String,
+  progressFraction: Float?,
+  onCancel: (() -> Unit)?,
+  modifier: Modifier = Modifier,
+  subtitle: String? = null,
+  cancelContentDescription: String = stringResource(R.string.task_hud_cancel_cd),
+  cancelButtonTag: String = "task_progress_cancel_button",
+) {
+  val animatedProgress by
+    animateFloatAsState(
+      targetValue = (progressFraction ?: 0f).coerceIn(0f, 1f),
+      animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessLow),
+      label = "studio_task_hud_progress",
+    )
+  val percentText =
+    if (progressFraction != null) {
+      "${(animatedProgress * 100f).toInt().coerceIn(0, 100)}%"
+    } else {
+      null
+    }
+
+  StudioGlassCard(
+    modifier = modifier.fillMaxWidth().testTag("studio_task_progress_pill"),
+    cornerRadius = 20.dp,
+    containerColor = StudioCard,
+    borderColor = StudioCoral.copy(alpha = 0.55f),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier.size(34.dp)
+            .clip(CircleShape)
+            .background(StudioCoral.copy(alpha = 0.14f))
+            .border(1.dp, StudioCoral.copy(alpha = 0.35f), CircleShape),
+        contentAlignment = Alignment.Center,
+      ) {
+        if (progressFraction != null) {
+          CircularProgressIndicator(
+            progress = { animatedProgress.coerceAtLeast(0.06f) },
+            color = StudioCoralLight,
+            trackColor = StudioObsidian,
+            strokeWidth = 2.5.dp,
+            modifier = Modifier.size(18.dp),
+          )
+        } else {
+          CircularProgressIndicator(
+            color = StudioCoralLight,
+            trackColor = StudioObsidian,
+            strokeWidth = 2.5.dp,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Text(
+            text = stepLabel.ifBlank { "Working..." },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = StudioTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          if (percentText != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+              text = percentText,
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = StudioCoralLight,
+              maxLines = 1,
+              softWrap = false,
+            )
+          }
+        }
+
+        if (progressFraction != null) {
+          LinearProgressIndicator(
+            progress = { animatedProgress },
+            color = StudioCoral,
+            trackColor = StudioObsidian,
+            strokeCap = StrokeCap.Round,
+            modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
+          )
+        } else {
+          LinearProgressIndicator(
+            color = StudioCoral,
+            trackColor = StudioObsidian,
+            strokeCap = StrokeCap.Round,
+            modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
+          )
+        }
+
+        if (!subtitle.isNullOrBlank()) {
+          Text(
+            text = subtitle,
+            style = MaterialTheme.typography.labelSmall,
+            color = StudioTextSecondary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+
+      if (onCancel != null) {
+        val cancelInteraction = remember { MutableInteractionSource() }
+        Box(
+          modifier =
+            Modifier.size(48.dp)
+              .minimumInteractiveComponentSize()
+              .clip(CircleShape)
+              .clickable(
+                interactionSource = cancelInteraction,
+                indication = ripple(bounded = true, color = Color.White),
+                onClick = onCancel,
+              )
+              .testTag(cancelButtonTag),
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier.studioPressScale(pressedScale = 0.92f, interactionSource = cancelInteraction)
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(StudioElevated)
+                .border(1.dp, StudioHairlineStrong, CircleShape),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Rounded.Close,
+              contentDescription = cancelContentDescription,
+              tint = StudioTextPrimary,
+              modifier = Modifier.size(16.dp),
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Subtle, non-pushy "Pro" pill for app top bars with a guaranteed 48dp x 48dp accessible touch area.
+ */
+@Composable
+fun StudioProTopBarPill(
+  isProUnlocked: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val accentColor = if (isProUnlocked) StudioSuccess else StudioCoralLight
+  val containerBg =
+    if (isProUnlocked) StudioSuccess.copy(alpha = 0.14f) else StudioElevated
+  val borderTint =
+    if (isProUnlocked) StudioSuccess.copy(alpha = 0.45f) else StudioCoral.copy(alpha = 0.45f)
+
+  Box(
+    modifier =
+      modifier
+        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+        .minimumInteractiveComponentSize()
+        .clip(CircleShape)
+        .clickable(
+          interactionSource = interactionSource,
+          indication = ripple(bounded = true, color = Color.White),
+          onClick = onClick,
+        )
+        .testTag("top_bar_pro_pill"),
+    contentAlignment = Alignment.Center,
+  ) {
+    Row(
+      modifier =
+        Modifier.studioPressScale(pressedScale = 0.94f, interactionSource = interactionSource)
+          .clip(CircleShape)
+          .background(containerBg)
+          .border(1.dp, borderTint, CircleShape)
+          .padding(horizontal = 10.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Icon(
+        imageVector = if (isProUnlocked) Icons.Rounded.Verified else Icons.Rounded.AutoAwesome,
+        contentDescription = stringResource(R.string.pro_pill_cd),
+        tint = accentColor,
+        modifier = Modifier.size(14.dp),
+      )
+      Text(
+        text = stringResource(if (isProUnlocked) R.string.pro_pill_active_label else R.string.pro_pill_label),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = accentColor,
+        maxLines = 1,
+        softWrap = false,
+      )
+    }
   }
 }

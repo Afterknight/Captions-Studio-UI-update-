@@ -31,6 +31,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +47,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.captionstudio.ui.StudioViewModel
+import com.example.captionstudio.ui.components.ProUpgradeBottomSheet
 import com.example.captionstudio.ui.screens.EditorScreen
 import com.example.captionstudio.ui.screens.ExportScreen
 import com.example.captionstudio.ui.screens.ProjectGalleryScreen
@@ -89,6 +93,8 @@ fun CaptionStudioApp(
   val safeZonePlatform by studioViewModel.safeZonePlatform.collectAsStateWithLifecycle()
   val customPresets by studioViewModel.customPresets.collectAsStateWithLifecycle()
   val isCreatorMode by studioViewModel.isCreatorMode.collectAsStateWithLifecycle()
+  val isProUnlocked by studioViewModel.isProUnlocked.collectAsStateWithLifecycle()
+  val backgroundTaskState by studioViewModel.backgroundTaskState.collectAsStateWithLifecycle()
   val previewQuality by studioViewModel.previewQualityMode.collectAsStateWithLifecycle()
   val speechLanguage by studioViewModel.speechLanguageTag.collectAsStateWithLifecycle()
   val speechState by studioViewModel.speechState.collectAsStateWithLifecycle()
@@ -97,6 +103,8 @@ fun CaptionStudioApp(
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
   val fontsVersion by studioViewModel.fontsVersion.collectAsStateWithLifecycle()
+
+  var showProSheet by remember { mutableStateOf(false) }
 
   LaunchedEffect(pendingDeepLink) {
     if (!pendingDeepLink.isNullOrBlank()) {
@@ -182,6 +190,8 @@ fun CaptionStudioApp(
         isRefreshing = isRefreshingProjects,
         thumbnailRefreshKey = thumbnailRefreshNonce,
         isBusy = isBusy,
+        isProUnlocked = isProUnlocked,
+        onOpenProSheet = { showProSheet = true },
         onSearchQueryChange = studioViewModel::updateGallerySearchQuery,
         onSortOptionChange = studioViewModel::updateGallerySortOption,
         onRefreshProjects = studioViewModel::refreshProjects,
@@ -270,6 +280,13 @@ fun CaptionStudioApp(
             previewQualityMode = previewQuality,
             speechState = speechState,
             autoTranscribeState = autoTranscribeState,
+            backgroundTaskState = backgroundTaskState,
+            exportState = exportState,
+            isProUnlocked = isProUnlocked,
+            onOpenProSheet = { showProSheet = true },
+            onCancelAutoTranscribe = studioViewModel::cancelAutoTranscribe,
+            onCancelBackgroundTask = studioViewModel::cancelBackgroundTask,
+            onCancelExport = studioViewModel::cancelExport,
             onClearBanner = studioViewModel::clearBanner,
             onToggleSafeGuides = studioViewModel::toggleSafeGuides,
             onAttachVideo = studioViewModel::attachVideoToActiveProject,
@@ -332,6 +349,8 @@ fun CaptionStudioApp(
       ExportScreen(
         project = activeProject,
         exportState = exportState,
+        isProUnlocked = isProUnlocked,
+        onOpenProSheet = { showProSheet = true },
         onUpdatePreferences = studioViewModel::updateExportPreferences,
         onStartExport = studioViewModel::startExport,
         onCancelExport = studioViewModel::cancelExport,
@@ -344,6 +363,14 @@ fun CaptionStudioApp(
         onBack = { navController.popBackStack() },
       )
     }
+  }
+
+  if (showProSheet) {
+    ProUpgradeBottomSheet(
+      isProUnlocked = isProUnlocked,
+      onToggleProPreview = { unlocked -> studioViewModel.setProUnlocked(unlocked) },
+      onDismiss = { showProSheet = false },
+    )
   }
 }
 
