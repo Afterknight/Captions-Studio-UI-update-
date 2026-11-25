@@ -127,6 +127,24 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `curated motion effects picker exposes only the 8 clean effects`() {
+    val curated = com.example.captionstudio.ui.components.CuratedMotionEffects
+    assertEquals(
+      listOf(
+        com.example.captionstudio.domain.model.LayerMotionEffect.NONE,
+        com.example.captionstudio.domain.model.LayerMotionEffect.FADE_IN,
+        com.example.captionstudio.domain.model.LayerMotionEffect.SLIDE_UP,
+        com.example.captionstudio.domain.model.LayerMotionEffect.POP_IN,
+        com.example.captionstudio.domain.model.LayerMotionEffect.ZOOM_IN,
+        com.example.captionstudio.domain.model.LayerMotionEffect.BOUNCE,
+        com.example.captionstudio.domain.model.LayerMotionEffect.FLOAT,
+        com.example.captionstudio.domain.model.LayerMotionEffect.TYPEWRITER,
+      ),
+      curated,
+    )
+  }
+
+  @Test
   fun `color picker hex normalization and HSV round-trip accurately`() {
     assertEquals("#EE7E70", com.example.captionstudio.ui.components.normalizeHexInput("ee7e70"))
     assertEquals("#FFFFFF", com.example.captionstudio.ui.components.normalizeHexInput("#ffffff"))

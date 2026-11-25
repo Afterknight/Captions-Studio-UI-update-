@@ -47,7 +47,6 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GridOn
@@ -102,11 +101,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ElementStylePatch
+import com.example.captionstudio.domain.model.EntryAnimationType
+import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.FontRole
-import com.example.captionstudio.domain.model.GeminiSettings
 import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.HookPacingTemplate
 import com.example.captionstudio.domain.model.KaraokeHighlightMode
@@ -119,12 +120,9 @@ import com.example.captionstudio.media.OfflineVoicePackStatus
 import com.example.captionstudio.media.SpeechRecognitionState
 import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.typography.CuratedFontPairing
-import com.example.captionstudio.ui.AiConfirmationAction
-import com.example.captionstudio.ui.PendingAiConfirmation
 import com.example.captionstudio.ui.components.CreatorModeQuickPanel
 import com.example.captionstudio.ui.components.KineticPreviewStage
 import com.example.captionstudio.ui.components.StudioCircleIconButton
-import com.example.captionstudio.ui.components.StudioCoralPillButton
 import com.example.captionstudio.ui.components.studioPressScale
 import com.example.ui.theme.StudioBorder
 import com.example.ui.theme.StudioCard
@@ -132,7 +130,6 @@ import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioCoralContainer
 import com.example.ui.theme.StudioCoralLight
 import com.example.ui.theme.StudioElevated
-import com.example.ui.theme.StudioError
 import com.example.ui.theme.StudioHairline
 import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
@@ -158,11 +155,9 @@ fun EditorScreen(
   isBusy: Boolean,
   statusBanner: String?,
   showSafeGuides: Boolean,
-  geminiSettings: GeminiSettings,
   previewQualityMode: PreviewQualityMode,
   speechState: SpeechRecognitionState,
   autoTranscribeState: AutoTranscribeUiState,
-  pendingAiConfirmation: PendingAiConfirmation?,
   onClearBanner: () -> Unit,
   onToggleSafeGuides: () -> Unit,
   onAttachVideo: (Uri) -> Unit,
@@ -173,15 +168,13 @@ fun EditorScreen(
   onRedo: () -> Unit,
   onUpdateTranscript: (String) -> Unit,
   onImportSubtitles: (String) -> Unit,
-  onAutoTranscribeVideo: (preferOnline: Boolean) -> Unit,
+  onAutoTranscribeVideo: () -> Unit,
   onStartDictation: () -> Unit,
   onStopDictation: () -> Unit,
   onAdjustWordTiming: (Int, Long, Long) -> Unit,
   transcribedSegments: List<VoskTextSegment> = emptyList(),
   onUpdateSegmentText: (String, String) -> Unit = { _, _ -> },
-  onGenerateCompositions: (forceLocal: Boolean) -> Unit,
-  onConfirmAiGeneration: () -> Unit,
-  onDismissAiConfirmation: () -> Unit,
+  onGenerateCompositions: () -> Unit,
   onUpdatePosition: (String, Float, Float, SafeRegion, Boolean) -> Unit,
   onUpdateTiming: (String, Long, Long) -> Unit,
   onSplitComposition: (String) -> Unit,
@@ -192,6 +185,7 @@ fun EditorScreen(
   onDeleteElement: (String, String) -> Unit = { _, _ -> },
   onPatchElementStyle: (String, String, ApplyScope, ElementStylePatch, Boolean) -> Unit,
   onResetElementStyle: (String, String) -> Unit = { _, _ -> },
+  onApplyAnimation: (String, ApplyScope, EntryAnimationType, ExitAnimationType, AnimationEasingType, Int, Int) -> Unit = { _, _, _, _, _, _, _ -> },
   fontsVersion: Int = 0,
   onToggleDepthMask: (String) -> Unit = {},
   onApplyPreset: (String) -> Unit = {},
@@ -204,7 +198,6 @@ fun EditorScreen(
   customPresets: List<PresetDefinition> = emptyList(),
   safeZonePlatform: SafeZonePlatform = SafeZonePlatform.NONE,
   onCycleSafeZone: () -> Unit = {},
-  onOpenStyleCloner: () -> Unit = {},
   onScaleAllText: (Float) -> Unit = {},
   onSetAllHeight: (Float) -> Unit = {},
   onSetAllEnergy: (Float) -> Unit = {},
@@ -213,10 +206,6 @@ fun EditorScreen(
   onSetAllKaraokeMode: (KaraokeHighlightMode) -> Unit = {},
   onQuickEditWord: (Int, String, HierarchyLevel, Boolean) -> Unit = { _, _, _, _ -> },
   onDeleteWord: (Int) -> Unit = {},
-  onOpenPresets: () -> Unit,
-  onOpenTypography: () -> Unit,
-  onOpenAnimation: () -> Unit,
-  onOpenAiSettings: () -> Unit,
   onOpenExport: () -> Unit,
   onBack: () -> Unit,
 ) {
@@ -421,19 +410,12 @@ fun EditorScreen(
             }
           }
 
-          // Top-right discreet glass utility pills: AI, Guides, Fullscreen, Video
+          // Top-right discreet glass utility pills: Guides, Fullscreen, Video
           Row(
             modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            StageOverlayIconPill(
-              icon = Icons.Filled.AutoAwesome,
-              contentDescription = "AI Settings",
-              tint = if (geminiSettings.enabled) StudioCoralLight else Color.White,
-              onClick = onOpenAiSettings,
-              modifier = Modifier.testTag("open_ai_settings_button"),
-            )
             Surface(
               color = Color.Black.copy(alpha = 0.56f),
               shape = CircleShape,
@@ -592,92 +574,58 @@ fun EditorScreen(
             }
           }
 
-          // Progressive-Disclosure Mode Switcher: Creator | Pro + Clone Style (scrollable-safe on 360dp)
+          // Two Clean Modes: Creator Mode | Pro Inspector
           Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            modifier =
+              Modifier.fillMaxWidth()
+                .clip(CircleShape)
+                .background(StudioCard)
+                .border(1.dp, StudioHairlineStrong, CircleShape)
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Row(
-              modifier =
-                Modifier.clip(CircleShape)
-                  .background(StudioCard)
-                  .border(1.dp, StudioHairlineStrong, CircleShape)
-                  .padding(3.dp),
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Surface(
-                color = if (isCreatorMode) StudioCoral else Color.Transparent,
-                shape = CircleShape,
-                modifier =
-                  Modifier.heightIn(min = 42.dp)
-                    .clip(CircleShape)
-                    .clickable { onSetCreatorMode(true) }
-                    .testTag("editor_mode_creator"),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Text(
-                    text = "Creator",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isCreatorMode) Color.White else StudioTextSecondary,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                  )
-                }
-              }
-              Surface(
-                color = if (!isCreatorMode) StudioCoral else Color.Transparent,
-                shape = CircleShape,
-                modifier =
-                  Modifier.heightIn(min = 42.dp)
-                    .clip(CircleShape)
-                    .clickable { onSetCreatorMode(false) }
-                    .testTag("editor_mode_pro"),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Text(
-                    text = "Pro Studio",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (!isCreatorMode) Color.White else StudioTextSecondary,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                  )
-                }
-              }
-            }
-
             Surface(
-              color = StudioCoralContainer.copy(alpha = 0.55f),
+              color = if (isCreatorMode) StudioCoral else Color.Transparent,
               shape = CircleShape,
               modifier =
-                Modifier.heightIn(min = 48.dp)
+                Modifier.weight(1f)
+                  .heightIn(min = 42.dp)
                   .clip(CircleShape)
-                  .border(1.dp, StudioCoral.copy(alpha = 0.45f), CircleShape)
-                  .clickable(onClick = onOpenStyleCloner)
-                  .testTag("editor_clone_reel_button"),
+                  .clickable { onSetCreatorMode(true) }
+                  .testTag("editor_mode_creator"),
             ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.AutoAwesome,
-                  contentDescription = null,
-                  tint = StudioCoralLight,
-                  modifier = Modifier.size(15.dp),
-                )
+              Box(contentAlignment = Alignment.Center) {
                 Text(
-                  text = "Clone Reel",
+                  text = "Creator Mode",
                   style = MaterialTheme.typography.labelMedium,
                   fontWeight = FontWeight.SemiBold,
-                  color = StudioCoralLight,
+                  color = if (isCreatorMode) Color.White else StudioTextSecondary,
                   maxLines = 1,
                   softWrap = false,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+              }
+            }
+            Surface(
+              color = if (!isCreatorMode) StudioCoral else Color.Transparent,
+              shape = CircleShape,
+              modifier =
+                Modifier.weight(1f)
+                  .heightIn(min = 42.dp)
+                  .clip(CircleShape)
+                  .clickable { onSetCreatorMode(false) }
+                  .testTag("editor_mode_pro"),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Text(
+                  text = "Pro Inspector",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = if (!isCreatorMode) Color.White else StudioTextSecondary,
+                  maxLines = 1,
+                  softWrap = false,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
               }
             }
@@ -694,7 +642,6 @@ fun EditorScreen(
               safeZonePlatform = safeZonePlatform,
               isBusy = isBusy,
               onApplyPreset = onApplyPreset,
-              onOpenAllPresets = onOpenPresets,
               onScaleAllText = onScaleAllText,
               onSetAllHeight = onSetAllHeight,
               onSetAllEnergy = onSetAllEnergy,
@@ -702,7 +649,7 @@ fun EditorScreen(
               onApplyHookPacing = onApplyHookPacing,
               onCycleSafeZone = onCycleSafeZone,
               onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
-              onAutoTranscribe = { onAutoTranscribeVideo(false) },
+              onAutoTranscribe = onAutoTranscribeVideo,
               onOpenScriptEditor = {
                 onSetCreatorMode(false)
                 activeTool = EditorTool.TIMING
@@ -778,7 +725,6 @@ fun EditorScreen(
                   fontsVersion = fontsVersion,
                   isBusy = isBusy,
                   autoTranscribeState = autoTranscribeState,
-                  geminiSettings = geminiSettings,
                   onSelectElement = { elId -> activeComp?.let { onSelectElement(it.id, elId) } },
                   onScopeChange = { applyScope = it },
                   onSelectFontForLayer = { elId, fontId ->
@@ -794,7 +740,6 @@ fun EditorScreen(
                   },
                   onApplyPreset = onApplyPreset,
                   onApplyHookPacing = onApplyHookPacing,
-                  onOpenPresets = onOpenPresets,
                   onOpenFontTab = { activeTool = EditorTool.FONT },
                   onGenerate = onGenerateCompositions,
                   onAutoTranscribe = onAutoTranscribeVideo,
@@ -829,9 +774,6 @@ fun EditorScreen(
                     activeComp?.let { comp -> onResetElementStyle(comp.id, elId) }
                   },
                   onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
-                  onOpenTypographyStudio = onOpenTypography,
-                  onOpenAnimationStudio = onOpenAnimation,
-                  onOpenPresets = onOpenPresets,
                 )
 
               EditorTool.FONT ->
@@ -853,7 +795,6 @@ fun EditorScreen(
                     activeComp?.let { comp -> onResetElementStyle(comp.id, elId) }
                   },
                   onApplyPairing = onApplyPairing,
-                  onOpenTypographyStudio = onOpenTypography,
                 )
 
               EditorTool.TIMING ->
@@ -863,7 +804,6 @@ fun EditorScreen(
                   playheadMs = playheadMs,
                   totalDurationMs = totalDuration,
                   isBusy = isBusy,
-                  geminiSettings = geminiSettings,
                   speechState = speechState,
                   autoTranscribeState = autoTranscribeState,
                   transcribedSegments = transcribedSegments,
@@ -924,8 +864,7 @@ fun EditorScreen(
                     }
                     editingWordIndex = idx
                   },
-                  onOpenAnimationStudio = onOpenAnimation,
-                  onOpenPresets = onOpenPresets,
+                  onApplyAnimation = onApplyAnimation,
                 )
               }
             }
@@ -1058,60 +997,6 @@ fun EditorScreen(
         }
       }
     }
-  }
-
-  // Cost Protection Confirmation Dialog before Gemini Request
-  pendingAiConfirmation?.let { info ->
-    val isAudioTranscribe = info.action == AiConfirmationAction.TRANSCRIBE_AUDIO
-    AlertDialog(
-      onDismissRequest = onDismissAiConfirmation,
-      containerColor = StudioCard,
-      shape = RoundedCornerShape(24.dp),
-      title = {
-        Text(
-          if (isAudioTranscribe) "Confirm AI Transcription" else "Confirm AI Caption Analysis",
-          style = MaterialTheme.typography.titleLarge,
-          color = StudioTextPrimary,
-        )
-      },
-      text = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text("Model: ${info.modelDisplayName}", color = StudioCoralLight, fontWeight = FontWeight.SemiBold)
-          Text(
-            text =
-              if (isAudioTranscribe) {
-                "Token budget: ${info.tokenBudget} max output tokens\nPayload: Mono audio clip for millisecond word transcription"
-              } else {
-                "Token budget: ${info.tokenBudget} max output tokens\nPayload: ${if (info.includesFrames) "Transcript + ${info.frameCount} sampled low-res frames" else "Transcript text & timings only"}"
-              },
-            style = MaterialTheme.typography.bodyMedium,
-            color = StudioTextSecondary,
-          )
-          if (info.isPaidOrRestricted) {
-            Text(
-              "Note: This model may require a paid tier or strict quota.",
-              color = StudioError,
-              style = MaterialTheme.typography.bodySmall,
-            )
-          }
-        }
-      },
-      confirmButton = {
-        Button(
-          onClick = onConfirmAiGeneration,
-          shape = CircleShape,
-          colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-          modifier = Modifier.testTag("confirm_ai_request_button"),
-        ) {
-          Text(if (isAudioTranscribe) "Run Transcribe" else "Continue", fontWeight = FontWeight.SemiBold)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = onDismissAiConfirmation) {
-          Text("Cancel", color = StudioTextSecondary)
-        }
-      },
-    )
   }
 
   // Add Custom Element Dialog

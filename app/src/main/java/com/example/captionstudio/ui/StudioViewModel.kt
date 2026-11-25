@@ -4,19 +4,15 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.captionstudio.ai.GeminiApiClient
-import com.example.captionstudio.ai.GeminiApiResult
 import com.example.captionstudio.data.local.AppDatabase
 import com.example.captionstudio.data.local.ProjectRepository
 import com.example.captionstudio.data.preferences.SettingsRepository
-import com.example.captionstudio.data.security.SecureApiKeyStore
 import com.example.captionstudio.domain.model.AnimationDefaults
 import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.CompositionElement
-import com.example.captionstudio.domain.model.ConnectionStatus
 import com.example.captionstudio.domain.model.DepthLayer
 import com.example.captionstudio.domain.model.ElementStylePatch
 import com.example.captionstudio.domain.model.EntryAnimationType
@@ -24,8 +20,6 @@ import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.ExportPreferences
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.FontRoleOverrides
-import com.example.captionstudio.domain.model.GeminiSettings
-import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.HookPacingTemplate
 import com.example.captionstudio.domain.model.KaraokeHighlightMode
@@ -72,26 +66,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class AiConfirmationAction {
-  COMPOSE_CAPTIONS,
-  TRANSCRIBE_AUDIO,
-}
-
-data class PendingAiConfirmation(
-  val modelDisplayName: String,
-  val isPaidOrRestricted: Boolean,
-  val includesFrames: Boolean,
-  val tokenBudget: Int,
-  val frameCount: Int,
-  val action: AiConfirmationAction = AiConfirmationAction.COMPOSE_CAPTIONS,
-)
-
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
 
   private val db = AppDatabase.getInstance(application)
   private val projectRepo = ProjectRepository(db.projectDao())
   private val settingsRepo = SettingsRepository(application)
-  private val keyStore = SecureApiKeyStore(application)
   private val speechManager = SpeechTranscriptionManager(application)
   private val autoTranscriber = VideoAutoTranscriber(application)
 
@@ -153,13 +132,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-  val geminiSettings: StateFlow<GeminiSettings> =
-    settingsRepo.geminiSettings.stateIn(
-      viewModelScope,
-      SharingStarted.WhileSubscribed(5000),
-      GeminiSettings(),
-    )
-
   val previewQualityMode: StateFlow<PreviewQualityMode> =
     settingsRepo.previewQualityMode.stateIn(
       viewModelScope,
@@ -209,12 +181,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private val _statusBanner = MutableStateFlow<String?>(null)
   val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
-
-  private val _pendingAiConfirmation = MutableStateFlow<PendingAiConfirmation?>(null)
-  val pendingAiConfirmation: StateFlow<PendingAiConfirmation?> = _pendingAiConfirmation.asStateFlow()
-
-  private val _hasSavedApiKey = MutableStateFlow(keyStore.hasApiKey())
-  val hasSavedApiKey: StateFlow<Boolean> = _hasSavedApiKey.asStateFlow()
 
   private val _showSafeGuides = MutableStateFlow(false)
   val showSafeGuides: StateFlow<Boolean> = _showSafeGuides.asStateFlow()
@@ -364,14 +330,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _playheadMs.value = 0L
       _statusBanner.value = analysis.summary
       if (meta.hasAudio) {
-        val autoUseOnline =
-          geminiSettings.value.enabled &&
-            geminiSettings.value.usageMode == GeminiUsageMode.GEMINI_ASSISTED &&
-            !geminiSettings.value.confirmBeforeRequest &&
-            keyStore.hasApiKey() &&
-            geminiSettings.value.selectedModelName.isNotBlank()
         viewModelScope.launch {
-          runAutoTranscribeInternal(useOnline = autoUseOnline, autoCompose = true)
+          runAutoTranscribeInternal(autoCompose = true)
         }
       }
       created.id
@@ -450,7 +410,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         )
         _statusBanner.value = analysis.summary
         if (meta.hasAudio && current.transcriptText.isBlank()) {
-          runAutoTranscribeInternal(useOnline = false, autoCompose = true)
+          runAutoTranscribeInternal(autoCompose = true)
         }
       } finally {
         _isBusy.value = false
@@ -667,89 +627,38 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   // --- Composition Generation ---
 
-  fun requestGenerateCompositions(forceLocalOnly: Boolean = false) {
+  fun requestGenerateCompositions() {
     val project = _activeProject.value ?: return
     if (project.transcriptText.isBlank()) {
       _statusBanner.value = "Enter, dictate, or import a transcript before generating captions."
       return
     }
-
-    val settings = geminiSettings.value
-    val canUseGemini =
-      !forceLocalOnly &&
-        settings.enabled &&
-        settings.usageMode != GeminiUsageMode.OFFLINE &&
-        keyStore.hasApiKey() &&
-        settings.selectedModelName.isNotBlank()
-
-    if (canUseGemini && settings.confirmBeforeRequest) {
-      val modelInfo =
-        settings.cachedModels.firstOrNull { it.name == settings.selectedModelName }
-      _pendingAiConfirmation.value =
-        PendingAiConfirmation(
-          modelDisplayName = modelInfo?.displayName ?: settings.selectedModelName.removePrefix("models/"),
-          isPaidOrRestricted = modelInfo?.isLikelyPaidOrRestricted == true,
-          includesFrames =
-            settings.allowFrameSharing &&
-              !settings.transcriptOnly &&
-              project.videoUriString.isNotBlank() &&
-              (modelInfo?.supportsImageInput != false),
-          tokenBudget = settings.tokenBudget,
-          frameCount = if (settings.allowFrameSharing && !settings.transcriptOnly) 8 else 0,
-        )
-      return
-    }
-
-    executeCompositionGeneration(useGemini = canUseGemini)
+    executeCompositionGeneration()
   }
 
-  fun requestAutoTranscribeVideo(preferOnline: Boolean) {
+  fun requestAutoTranscribeVideo() {
     val project = _activeProject.value ?: return
     if (project.videoUriString.isBlank()) {
       _statusBanner.value = "Attach a video before running automatic audio transcription."
       return
     }
-    if (preferOnline) {
-      val settings = geminiSettings.value
-      val key = keyStore.getApiKey()
-      if (!settings.enabled || key.isNullOrBlank() || settings.selectedModelName.isBlank()) {
-        _statusBanner.value = "Configure & enable Gemini in AI Settings to run online AI transcription."
-        return
-      }
-      if (settings.confirmBeforeRequest) {
-        val modelInfo =
-          settings.cachedModels.firstOrNull { it.name == settings.selectedModelName }
-        _pendingAiConfirmation.value =
-          PendingAiConfirmation(
-            modelDisplayName = modelInfo?.displayName ?: settings.selectedModelName.removePrefix("models/"),
-            isPaidOrRestricted = modelInfo?.isLikelyPaidOrRestricted == true,
-            includesFrames = false,
-            tokenBudget = 4096,
-            frameCount = 0,
-            action = AiConfirmationAction.TRANSCRIBE_AUDIO,
-          )
-        return
-      }
-    }
     viewModelScope.launch {
-      runAutoTranscribeInternal(useOnline = preferOnline, autoCompose = true)
+      runAutoTranscribeInternal(autoCompose = true)
     }
   }
 
-  private suspend fun runAutoTranscribeInternal(useOnline: Boolean, autoCompose: Boolean) {
+  private suspend fun runAutoTranscribeInternal(autoCompose: Boolean) {
     val project = _activeProject.value ?: return
     if (project.videoUriString.isBlank()) return
     autoTranscriber.clearError()
 
-    val settings = geminiSettings.value
-    val apiKey = if (useOnline) keyStore.getApiKey() else null
     val result =
       autoTranscriber.transcribeVideo(
         videoUri = Uri.parse(project.videoUriString),
         languageTag = speechLanguageTag.value,
-        useOnlineGemini = useOnline,
-        geminiApiKey = apiKey,
-        geminiModelName = settings.selectedModelName,
+        useOnlineGemini = false,
+        geminiApiKey = null,
+        geminiModelName = "",
       )
 
     val latest = _activeProject.value ?: return
@@ -841,21 +750,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
-  fun dismissAiConfirmation() {
-    _pendingAiConfirmation.value = null
-  }
-
-  fun confirmAiGeneration() {
-    val pending = _pendingAiConfirmation.value
-    _pendingAiConfirmation.value = null
-    if (pending?.action == AiConfirmationAction.TRANSCRIBE_AUDIO) {
-      viewModelScope.launch { runAutoTranscribeInternal(useOnline = true, autoCompose = true) }
-    } else {
-      executeCompositionGeneration(useGemini = true)
-    }
-  }
-
-  private fun executeCompositionGeneration(useGemini: Boolean) {
+  private fun executeCompositionGeneration() {
     val project = _activeProject.value ?: return
     val preset = PresetCatalog.findById(project.presetId)
 
@@ -894,76 +789,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             fontOverrides = project.fontOverrides,
           )
 
-        var finalComps = localComps
-        var bannerMsg =
+        val bannerMsg =
           if (effectiveAnalysis.shotAnalyses.isNotEmpty()) {
             "Generated ${localComps.size} frame-aware captions across ${effectiveAnalysis.shotAnalyses.size} shot(s) offline."
           } else {
             "Generated ${localComps.size} kinetic captions offline."
           }
 
-        if (useGemini) {
-          val apiKey = keyStore.getApiKey()
-          val settings = geminiSettings.value
-          if (apiKey.isNullOrBlank()) {
-            bannerMsg = "No Gemini key configured — applied smart offline placement instead."
-          } else {
-            val frames =
-              if (settings.allowFrameSharing &&
-                  !settings.transcriptOnly &&
-                  project.videoUriString.isNotBlank()
-              ) {
-                VideoAnalysisService.sampleTimestampedFramesAsJpegBase64(
-                  context = getApplication(),
-                  videoUri = Uri.parse(project.videoUriString),
-                  durationMs = project.metadata.durationMs,
-                  maxFrames = 8,
-                )
-              } else {
-                emptyList()
-              }
-
-            val result =
-              GeminiApiClient.generateKineticCompositions(
-                apiKey = apiKey,
-                modelName = settings.selectedModelName,
-                transcript = project.transcriptText,
-                wordTimings = project.wordTimings,
-                preset = preset,
-                analysisReport = effectiveAnalysis,
-                tokenBudget = settings.tokenBudget,
-                timestampedFrames = frames,
-              )
-
-            when (result) {
-              is GeminiApiResult.Success -> {
-                finalComps = result.data
-                val actualModel =
-                  (result.usedModelName ?: settings.selectedModelName).removePrefix("models/")
-                val requestedModel = settings.selectedModelName.removePrefix("models/")
-                bannerMsg =
-                  if (actualModel != requestedModel) {
-                    "Generated ${result.data.size} captions via backup model $actualModel."
-                  } else {
-                    "Generated ${result.data.size} vision-directed captions via $actualModel."
-                  }
-              }
-              is GeminiApiResult.Error -> {
-                bannerMsg =
-                  if (result.isTransientBusy || result.httpCode == 503 || result.httpCode == 429) {
-                    "Gemini is busy right now — applied smart offline placement instead."
-                  } else {
-                    "Gemini unavailable — applied smart offline placement instead."
-                  }
-              }
-            }
-          }
-        }
-
         val validated =
           CompositionValidator.validateAndRepair(
             context = getApplication(),
-            compositions = finalComps,
+            compositions = localComps,
             videoWidthPx = project.metadata.effectiveWidth,
             videoHeightPx = project.metadata.effectiveHeight,
           )
@@ -1530,121 +1366,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
-  // --- Gemini Settings & Keystore ---
-
-  fun saveApiKey(rawKey: String) {
-    val ok = keyStore.saveApiKey(rawKey)
-    _hasSavedApiKey.value = keyStore.hasApiKey()
-    viewModelScope.launch {
-      if (ok) {
-        settingsRepo.setConnectionStatus(
-          ConnectionStatus.CONFIGURED_UNVERIFIED,
-          "API key encrypted in Android Keystore. Tap Refresh Models or Test Connection.",
-        )
-        refreshAvailableModels()
-      } else {
-        settingsRepo.setConnectionStatus(ConnectionStatus.ERROR, "Could not encrypt empty key.")
-      }
-    }
-  }
-
-  fun removeApiKey() {
-    keyStore.removeApiKey()
-    _hasSavedApiKey.value = false
-    viewModelScope.launch {
-      settingsRepo.updateCachedModels(emptyList())
-      settingsRepo.setSelectedModel("")
-      settingsRepo.setConnectionStatus(ConnectionStatus.NOT_CONFIGURED, "API key removed.")
-    }
-  }
-
-  fun refreshAvailableModels() {
-    val key = keyStore.getApiKey()
-    if (key.isNullOrBlank()) {
-      viewModelScope.launch {
-        settingsRepo.setConnectionStatus(
-          ConnectionStatus.NOT_CONFIGURED,
-          "Save a Gemini API key first to discover models.",
-        )
-      }
-      return
-    }
-    viewModelScope.launch {
-      settingsRepo.setConnectionStatus(ConnectionStatus.TESTING, "Fetching models.list...")
-      when (val res = GeminiApiClient.fetchAvailableModels(key)) {
-        is GeminiApiResult.Success -> {
-          settingsRepo.updateCachedModels(res.data)
-          settingsRepo.setConnectionStatus(
-            ConnectionStatus.CONFIGURED_UNVERIFIED,
-            "Discovered ${res.data.size} generateContent models.",
-          )
-        }
-        is GeminiApiResult.Error -> {
-          settingsRepo.setConnectionStatus(ConnectionStatus.ERROR, res.message)
-        }
-      }
-    }
-  }
-
-  fun testGeminiConnection() {
-    val key = keyStore.getApiKey()
-    val model = geminiSettings.value.selectedModelName
-    if (key.isNullOrBlank()) {
-      viewModelScope.launch {
-        settingsRepo.setConnectionStatus(ConnectionStatus.NOT_CONFIGURED, "No API key stored.")
-      }
-      return
-    }
-    viewModelScope.launch {
-      settingsRepo.setConnectionStatus(ConnectionStatus.TESTING, "Testing $model...")
-      when (val res = GeminiApiClient.testConnection(key, model)) {
-        is GeminiApiResult.Success -> {
-          settingsRepo.setConnectionStatus(ConnectionStatus.CONNECTED, res.data)
-        }
-        is GeminiApiResult.Error -> {
-          settingsRepo.setConnectionStatus(ConnectionStatus.ERROR, res.message)
-        }
-      }
-    }
-  }
-
-  fun setGeminiEnabled(enabled: Boolean) {
-    viewModelScope.launch { settingsRepo.setGeminiEnabled(enabled) }
-  }
-
-  fun setUsageMode(mode: GeminiUsageMode) {
-    viewModelScope.launch { settingsRepo.setUsageMode(mode) }
-  }
-
-  fun setSelectedModel(modelName: String) {
-    viewModelScope.launch { settingsRepo.setSelectedModel(modelName) }
-  }
-
-  fun setConfirmBeforeRequest(confirm: Boolean) {
-    viewModelScope.launch { settingsRepo.setConfirmBeforeRequest(confirm) }
-  }
-
-  fun setTokenBudget(budget: Int) {
-    viewModelScope.launch { settingsRepo.setTokenBudget(budget) }
-  }
-
-  fun setTranscriptOnly(transcriptOnly: Boolean) {
-    viewModelScope.launch {
-      settingsRepo.setTranscriptOnly(transcriptOnly)
-      if (transcriptOnly && geminiSettings.value.allowFrameSharing) {
-        settingsRepo.setAllowFrameSharing(false)
-      }
-    }
-  }
-
-  fun setAllowFrameSharing(allowed: Boolean) {
-    viewModelScope.launch {
-      settingsRepo.setAllowFrameSharing(allowed)
-      if (allowed && geminiSettings.value.transcriptOnly) {
-        settingsRepo.setTranscriptOnly(false)
-      }
-    }
-  }
+  // --- Preview & Speech Settings ---
 
   fun setPreviewQualityMode(mode: PreviewQualityMode) {
     viewModelScope.launch { settingsRepo.setPreviewQualityMode(mode) }

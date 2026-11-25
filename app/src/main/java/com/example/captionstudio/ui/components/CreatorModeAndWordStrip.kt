@@ -100,7 +100,6 @@ fun CreatorModeQuickPanel(
   safeZonePlatform: SafeZonePlatform,
   isBusy: Boolean,
   onApplyPreset: (String) -> Unit,
-  onOpenAllPresets: () -> Unit,
   onScaleAllText: (Float) -> Unit,
   onSetAllHeight: (Float) -> Unit,
   onSetAllEnergy: (Float) -> Unit,
@@ -165,14 +164,7 @@ fun CreatorModeQuickPanel(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
           )
-          Text(
-            text = "See all",
-            style = MaterialTheme.typography.labelMedium,
-            color = StudioCoralLight,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.clickable { onOpenAllPresets() }.padding(start = 8.dp),
-          )
+          StudioSubtlePill(text = "${allPresets.size} looks", tint = StudioCoralLight)
         }
 
         Row(

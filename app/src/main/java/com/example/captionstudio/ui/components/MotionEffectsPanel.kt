@@ -8,7 +8,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,18 +38,13 @@ import androidx.compose.material.icons.rounded.SportsBasketball
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.Waves
 import androidx.compose.material.icons.rounded.ZoomIn
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,9 +75,26 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Predefined motion effects selector accessible directly inside the typography customization menu.
- * Lets creators browse categorized motion presets (Entry, Loop, Dynamic, Reveal), apply them
- * live to the active kinetic layer, and fine-tune Speed and Intensity cleanly.
+ * The 8 cleanest, most tasteful motion effects surfaced in the UI picker.
+ * All legacy [LayerMotionEffect] enum entries remain intact in CompositionModels.kt
+ * for backward compatibility with existing saved projects.
+ */
+internal val CuratedMotionEffects: List<LayerMotionEffect> =
+  listOf(
+    LayerMotionEffect.NONE,
+    LayerMotionEffect.FADE_IN,
+    LayerMotionEffect.SLIDE_UP,
+    LayerMotionEffect.POP_IN,
+    LayerMotionEffect.ZOOM_IN,
+    LayerMotionEffect.BOUNCE,
+    LayerMotionEffect.FLOAT,
+    LayerMotionEffect.TYPEWRITER,
+  )
+
+/**
+ * Curated motion effects selector accessible directly inside the Pro Inspector.
+ * Lets creators pick from 8 clean motion effects, apply them live to the active kinetic layer,
+ * and fine-tune Speed and Intensity cleanly.
  */
 @Composable
 fun MotionEffectsPanel(
@@ -94,27 +104,6 @@ fun MotionEffectsPanel(
   onOpenAnimationStudio: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
-  var categoryFilter by remember { mutableStateOf("All") }
-  val categories = remember { listOf("All", "Entry", "Loop", "Dynamic", "Reveal") }
-  val filteredEffects =
-    remember(categoryFilter) {
-      if (categoryFilter == "All") {
-        LayerMotionEffect.entries
-      } else {
-        LayerMotionEffect.entries.filter {
-          it == LayerMotionEffect.NONE || it.category.equals(categoryFilter, ignoreCase = true)
-        }
-      }
-    }
-
-  val chipColors =
-    FilterChipDefaults.filterChipColors(
-      selectedContainerColor = StudioCoralContainer,
-      selectedLabelColor = StudioCoralLight,
-      containerColor = StudioElevated,
-      labelColor = StudioTextSecondary,
-    )
-
   Column(
     modifier = modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -153,33 +142,8 @@ fun MotionEffectsPanel(
       }
     }
 
-    // Category filter chips
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      categories.forEach { cat ->
-        val isChosen = categoryFilter == cat
-        FilterChip(
-          selected = isChosen,
-          onClick = { categoryFilter = cat },
-          shape = CircleShape,
-          colors = chipColors,
-          border =
-            FilterChipDefaults.filterChipBorder(
-              enabled = true,
-              selected = isChosen,
-              borderColor = StudioHairline,
-              selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
-            ),
-          label = { Text(cat, style = MaterialTheme.typography.labelSmall) },
-          modifier = Modifier.testTag("motion_cat_${cat.lowercase()}"),
-        )
-      }
-    }
-
-    // 3-column clean grid of all predefined motion effects
-    val chunkedRows = remember(filteredEffects) { filteredEffects.chunked(3) }
+    // Balanced 2-column x 4-row grid of the 8 curated motion effects
+    val chunkedRows = remember { CuratedMotionEffects.chunked(2) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       chunkedRows.forEach { rowItems ->
         Row(
@@ -198,7 +162,7 @@ fun MotionEffectsPanel(
               modifier = Modifier.weight(1f),
             )
           }
-          repeat(3 - rowItems.size) {
+          repeat(2 - rowItems.size) {
             Spacer(modifier = Modifier.weight(1f))
           }
         }

@@ -44,14 +44,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.captionstudio.ui.StudioViewModel
-import com.example.captionstudio.ui.screens.AiSettingsScreen
-import com.example.captionstudio.ui.screens.AnimationScreen
 import com.example.captionstudio.ui.screens.EditorScreen
 import com.example.captionstudio.ui.screens.ExportScreen
-import com.example.captionstudio.ui.screens.PresetsScreen
 import com.example.captionstudio.ui.screens.ProjectGalleryScreen
-import com.example.captionstudio.ui.screens.StyleClonerScreen
-import com.example.captionstudio.ui.screens.TypographyScreen
 import com.example.ui.theme.CaptionStudioTheme
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioObsidian
@@ -65,17 +60,7 @@ private val StudioEmphasizedEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 @Serializable data class EditorRoute(val projectId: String)
 
-@Serializable data class PresetsRoute(val projectId: String)
-
-@Serializable data class TypographyRoute(val projectId: String)
-
-@Serializable data class AnimationRoute(val projectId: String)
-
-@Serializable object AiSettingsRoute
-
 @Serializable data class ExportRoute(val projectId: String)
-
-@Serializable object StyleClonerRoute
 
 @Composable
 fun CaptionStudioApp(
@@ -104,14 +89,11 @@ fun CaptionStudioApp(
   val safeZonePlatform by studioViewModel.safeZonePlatform.collectAsStateWithLifecycle()
   val customPresets by studioViewModel.customPresets.collectAsStateWithLifecycle()
   val isCreatorMode by studioViewModel.isCreatorMode.collectAsStateWithLifecycle()
-  val geminiSettings by studioViewModel.geminiSettings.collectAsStateWithLifecycle()
   val previewQuality by studioViewModel.previewQualityMode.collectAsStateWithLifecycle()
   val speechLanguage by studioViewModel.speechLanguageTag.collectAsStateWithLifecycle()
   val speechState by studioViewModel.speechState.collectAsStateWithLifecycle()
   val autoTranscribeState by studioViewModel.autoTranscribeState.collectAsStateWithLifecycle()
   val exportState by studioViewModel.exportState.collectAsStateWithLifecycle()
-  val pendingAiConfirm by studioViewModel.pendingAiConfirmation.collectAsStateWithLifecycle()
-  val hasSavedKey by studioViewModel.hasSavedApiKey.collectAsStateWithLifecycle()
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
   val fontsVersion by studioViewModel.fontsVersion.collectAsStateWithLifecycle()
@@ -199,7 +181,6 @@ fun CaptionStudioApp(
         sortOption = gallerySortOption,
         isRefreshing = isRefreshingProjects,
         thumbnailRefreshKey = thumbnailRefreshNonce,
-        geminiSettings = geminiSettings,
         isBusy = isBusy,
         onSearchQueryChange = studioViewModel::updateGallerySearchQuery,
         onSortOptionChange = studioViewModel::updateGallerySortOption,
@@ -214,8 +195,6 @@ fun CaptionStudioApp(
         },
         onRenameProject = studioViewModel::renameProject,
         onDeleteProject = studioViewModel::deleteProject,
-        onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
-        onOpenSettings = { navController.navigate(AiSettingsRoute) },
       )
     }
 
@@ -288,11 +267,9 @@ fun CaptionStudioApp(
             isBusy = isBusy,
             statusBanner = statusBanner,
             showSafeGuides = showSafeGuides,
-            geminiSettings = geminiSettings,
             previewQualityMode = previewQuality,
             speechState = speechState,
             autoTranscribeState = autoTranscribeState,
-            pendingAiConfirmation = pendingAiConfirm,
             onClearBanner = studioViewModel::clearBanner,
             onToggleSafeGuides = studioViewModel::toggleSafeGuides,
             onAttachVideo = studioViewModel::attachVideoToActiveProject,
@@ -310,8 +287,6 @@ fun CaptionStudioApp(
             transcribedSegments = transcribedSegments,
             onUpdateSegmentText = studioViewModel::updateTranscribedSegmentText,
             onGenerateCompositions = studioViewModel::requestGenerateCompositions,
-            onConfirmAiGeneration = studioViewModel::confirmAiGeneration,
-            onDismissAiConfirmation = studioViewModel::dismissAiConfirmation,
             onUpdatePosition = studioViewModel::updateCompositionPosition,
             onUpdateTiming = studioViewModel::updateCompositionTiming,
             onSplitComposition = studioViewModel::splitComposition,
@@ -322,6 +297,7 @@ fun CaptionStudioApp(
             onDeleteElement = studioViewModel::deleteElement,
             onPatchElementStyle = studioViewModel::updateElementStyle,
             onResetElementStyle = studioViewModel::resetElementStyle,
+            onApplyAnimation = studioViewModel::applyAnimationSettings,
             fontsVersion = fontsVersion,
             onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
             onApplyPreset = studioViewModel::applyPreset,
@@ -334,7 +310,6 @@ fun CaptionStudioApp(
             customPresets = customPresets,
             safeZonePlatform = safeZonePlatform,
             onCycleSafeZone = studioViewModel::cycleSafeZonePlatform,
-            onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
             onScaleAllText = studioViewModel::scaleAllCompositionsText,
             onSetAllHeight = studioViewModel::setAllCompositionsHeight,
             onSetAllEnergy = studioViewModel::setAllCompositionsEnergy,
@@ -343,10 +318,6 @@ fun CaptionStudioApp(
             onSetAllKaraokeMode = { mode -> studioViewModel.setAllKaraokeMode(mode) },
             onQuickEditWord = studioViewModel::quickEditWord,
             onDeleteWord = studioViewModel::deleteWordAt,
-            onOpenPresets = { navController.navigate(PresetsRoute(route.projectId)) },
-            onOpenTypography = { navController.navigate(TypographyRoute(route.projectId)) },
-            onOpenAnimation = { navController.navigate(AnimationRoute(route.projectId)) },
-            onOpenAiSettings = { navController.navigate(AiSettingsRoute) },
             onOpenExport = {
               studioViewModel.resetExportState()
               navController.navigate(ExportRoute(route.projectId))
@@ -355,84 +326,6 @@ fun CaptionStudioApp(
           )
         }
       }
-    }
-
-    composable<PresetsRoute> {
-      PresetsScreen(
-        activePresetId = activeProject?.presetId ?: "editorial",
-        customPresets = customPresets,
-        onApplyPreset = studioViewModel::applyPreset,
-        onOpenStyleCloner = { navController.navigate(StyleClonerRoute) },
-        onImportStyleLink = studioViewModel::importStyleFromDeepLink,
-        onDeleteCustomPreset = studioViewModel::deleteCustomPreset,
-        onBack = { navController.popBackStack() },
-      )
-    }
-
-    composable<StyleClonerRoute> {
-      StyleClonerScreen(
-        hasActiveProject = activeProject != null,
-        onSaveAndApplyPreset = { preset, apply ->
-          studioViewModel.saveCustomPreset(preset, applyToActiveProject = apply)
-          navController.popBackStack()
-        },
-        onBack = { navController.popBackStack() },
-      )
-    }
-
-    composable<TypographyRoute> {
-      TypographyScreen(
-        project = activeProject,
-        selectedCompositionId = selectedCompId,
-        selectedElementId = selectedElId,
-        fontsVersion = fontsVersion,
-        canUndo = canUndo,
-        onUndo = studioViewModel::undo,
-        onSelectElement = studioViewModel::selectElement,
-        onUpdateElementText = studioViewModel::updateElementText,
-        onDeleteElement = studioViewModel::deleteElement,
-        onPatchStyle = studioViewModel::updateElementStyle,
-        onResetElementStyle = studioViewModel::resetElementStyle,
-        onToggleDepthMask = studioViewModel::toggleCompositionDepthMask,
-        onApplyPairing = studioViewModel::applyCuratedPairing,
-        onDownloadFont = studioViewModel::downloadFontFamily,
-        onBack = { navController.popBackStack() },
-      )
-    }
-
-    composable<AnimationRoute> {
-      AnimationScreen(
-        project = activeProject,
-        selectedCompositionId = selectedCompId,
-        onApplyAnimation = studioViewModel::applyAnimationSettings,
-        onBack = { navController.popBackStack() },
-      )
-    }
-
-    composable<AiSettingsRoute> {
-      AiSettingsScreen(
-        settings = geminiSettings,
-        hasSavedApiKey = hasSavedKey,
-        previewQualityMode = previewQuality,
-        speechLanguageTag = speechLanguage,
-        onSaveApiKey = studioViewModel::saveApiKey,
-        onRemoveApiKey = studioViewModel::removeApiKey,
-        onTestConnection = studioViewModel::testGeminiConnection,
-        onRefreshModels = studioViewModel::refreshAvailableModels,
-        onSetGeminiEnabled = studioViewModel::setGeminiEnabled,
-        onSetUsageMode = studioViewModel::setUsageMode,
-        onSetSelectedModel = studioViewModel::setSelectedModel,
-        onSetConfirmBeforeRequest = studioViewModel::setConfirmBeforeRequest,
-        onSetTokenBudget = studioViewModel::setTokenBudget,
-        onSetTranscriptOnly = studioViewModel::setTranscriptOnly,
-        onSetAllowFrameSharing = studioViewModel::setAllowFrameSharing,
-        onSetPreviewQuality = studioViewModel::setPreviewQualityMode,
-        onSetSpeechLanguage = studioViewModel::setSpeechLanguageTag,
-        voicePackStatuses = voicePackStatuses,
-        onDownloadVoicePack = studioViewModel::downloadOfflineVoicePack,
-        onDeleteVoicePack = studioViewModel::deleteOfflineVoicePack,
-        onBack = { navController.popBackStack() },
-      )
     }
 
     composable<ExportRoute> {

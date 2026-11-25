@@ -39,8 +39,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -66,12 +64,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.captionstudio.domain.model.CaptionProject
-import com.example.captionstudio.domain.model.GeminiSettings
-import com.example.captionstudio.domain.model.GeminiUsageMode
 import com.example.captionstudio.domain.model.ProjectSortOption
 import com.example.captionstudio.ui.components.StudioAmbientBackdrop
 import com.example.captionstudio.ui.components.StudioBrandMark
-import com.example.captionstudio.ui.components.StudioCircleIconButton
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioObsidian
@@ -94,7 +89,6 @@ fun ProjectGalleryScreen(
   sortOption: ProjectSortOption,
   isRefreshing: Boolean,
   thumbnailRefreshKey: Int,
-  geminiSettings: GeminiSettings,
   isBusy: Boolean,
   onSearchQueryChange: (String) -> Unit,
   onSortOptionChange: (ProjectSortOption) -> Unit,
@@ -104,8 +98,6 @@ fun ProjectGalleryScreen(
   onCreateProject: suspend (String, Boolean) -> String,
   onRenameProject: (String, String) -> Unit,
   onDeleteProject: (String) -> Unit,
-  onOpenStyleCloner: () -> Unit = {},
-  onOpenSettings: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -142,7 +134,6 @@ fun ProjectGalleryScreen(
       handlePickedVideo(uri)
     }
 
-  val aiActive = geminiSettings.enabled && geminiSettings.usageMode != GeminiUsageMode.OFFLINE
   val pullToRefreshState = rememberPullToRefreshState()
 
   val listState =
@@ -198,14 +189,6 @@ fun ProjectGalleryScreen(
                 )
               }
             }
-
-            StudioCircleIconButton(
-              icon = Icons.Outlined.Settings,
-              contentDescription = stringResource(R.string.gallery_settings_cd),
-              onClick = onOpenSettings,
-              badgeDotColor = if (aiActive) StudioCoral else null,
-              modifier = Modifier.testTag("home_settings_button"),
-            )
           }
 
           GallerySearchBar(
@@ -271,7 +254,6 @@ fun ProjectGalleryScreen(
                     },
                     onBrowseFiles = { documentVideoLauncher.launch(arrayOf("video/*")) },
                     onCreateScript = { showNewProjectDialog = true },
-                    onOpenStyleCloner = onOpenStyleCloner,
                     modifier = Modifier.padding(bottom = 6.dp),
                   )
                 }
@@ -356,7 +338,6 @@ fun ProjectGalleryScreen(
                               onOpenProject(id)
                             }
                           },
-                          onOpenStyleCloner = onOpenStyleCloner,
                         )
                       GalleryListState.NO_SEARCH_MATCHES ->
                         GalleryNoSearchResultsCard(

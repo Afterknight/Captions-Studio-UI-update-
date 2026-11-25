@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,19 +55,17 @@ import kotlin.math.max
 
 /**
  * Displays the extracted video audio waveform with playhead scrubbing and one-tap
- * Offline / Online Gemini millisecond-accurate auto-transcription controls.
+ * offline millisecond-accurate auto-transcription controls.
  */
 @Composable
 fun AutoTranscribeControlCard(
   hasVideo: Boolean,
   hasAudio: Boolean,
-  geminiEnabled: Boolean,
   transcribeState: AutoTranscribeUiState,
   playheadMs: Long,
   totalDurationMs: Long,
   onSeekMs: (Long) -> Unit,
   onAutoTranscribeOffline: () -> Unit,
-  onAutoTranscribeOnline: () -> Unit,
   modifier: Modifier = Modifier,
   activePackLabel: String? = null,
   isOfflinePackInstalled: Boolean = true,
@@ -201,57 +198,28 @@ fun AutoTranscribeControlCard(
         )
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      Button(
+        onClick = onAutoTranscribeOffline,
+        enabled = hasVideo && hasAudio && !transcribeState.isRunning,
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = StudioCoral,
+            contentColor = Color.White,
+          ),
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("auto_transcribe_offline_button"),
       ) {
-        Button(
-          onClick = onAutoTranscribeOffline,
-          enabled = hasVideo && hasAudio && !transcribeState.isRunning,
-          colors =
-            ButtonDefaults.buttonColors(
-              containerColor = StudioCoral,
-              contentColor = Color.White,
-            ),
-          shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-          modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("auto_transcribe_offline_button"),
-        ) {
-          Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(Modifier.width(6.dp))
-          Text(
-            "Transcribe Offline",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        OutlinedButton(
-          onClick = onAutoTranscribeOnline,
-          enabled = hasVideo && hasAudio && geminiEnabled && !transcribeState.isRunning,
-          shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-          modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("auto_transcribe_online_button"),
-        ) {
-          Icon(
-            Icons.Filled.AutoAwesome,
-            contentDescription = null,
-            tint = if (geminiEnabled) StudioCoral else StudioTextSecondary,
-            modifier = Modifier.size(16.dp),
-          )
-          Spacer(Modifier.width(6.dp))
-          Text(
-            "AI Sync",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (geminiEnabled) StudioTextPrimary else StudioTextSecondary,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
+        Icon(Icons.Filled.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+          "Transcribe Offline",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          softWrap = false,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
     }
   }

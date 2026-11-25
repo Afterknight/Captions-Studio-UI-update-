@@ -40,9 +40,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -80,12 +78,13 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.ElementStylePatch
-import com.example.captionstudio.domain.model.GeminiSettings
-import com.example.captionstudio.domain.model.GeminiUsageMode
+import com.example.captionstudio.domain.model.EntryAnimationType
+import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.HookPacingTemplate
 import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.PresetCategory
@@ -127,8 +126,8 @@ import androidx.compose.material.icons.rounded.FormatUnderlined
 import kotlin.math.roundToInt
 
 /**
- * Signature "Caption Style" glass card matching the reference mockup with stylized Aa tiles
- * that apply presets live in one tap, plus "See all ->" to open the full Presets gallery.
+ * Signature "Caption Style" glass card with stylized Aa tiles that apply all 36 Normal & Kinetic
+ * presets live in one tap directly below the live video preview.
  */
 @Composable
 internal fun StyleQuickPanel(
@@ -139,16 +138,14 @@ internal fun StyleQuickPanel(
   fontsVersion: Int,
   isBusy: Boolean,
   autoTranscribeState: AutoTranscribeUiState,
-  geminiSettings: GeminiSettings,
   onSelectElement: (String) -> Unit,
   onScopeChange: (ApplyScope) -> Unit,
   onSelectFontForLayer: (String, String) -> Unit,
   onApplyPreset: (String) -> Unit,
   onApplyHookPacing: (HookPacingTemplate) -> Unit = {},
-  onOpenPresets: () -> Unit,
   onOpenFontTab: () -> Unit,
-  onGenerate: (Boolean) -> Unit,
-  onAutoTranscribe: (Boolean) -> Unit,
+  onGenerate: () -> Unit,
+  onAutoTranscribe: () -> Unit,
   onSelectComposition: (CaptionComposition) -> Unit,
   onOpenTimingTab: () -> Unit,
 ) {
@@ -198,27 +195,7 @@ internal fun StyleQuickPanel(
               color = StudioTextPrimary,
             )
           }
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier =
-              Modifier.clip(CircleShape)
-                .clickable(onClick = onOpenPresets)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .testTag("open_presets_button"),
-          ) {
-            Text(
-              text = "See all",
-              style = MaterialTheme.typography.labelMedium,
-              color = StudioTextSecondary,
-            )
-            Spacer(Modifier.width(4.dp))
-            Icon(
-              imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-              contentDescription = "See all caption presets",
-              tint = StudioTextSecondary,
-              modifier = Modifier.size(14.dp),
-            )
-          }
+          StudioSubtlePill(text = "${visiblePresets.size} looks", tint = StudioCoralLight)
         }
 
         // Category Filter Pills: All | Normal | Kinetic
@@ -442,40 +419,21 @@ internal fun StyleQuickPanel(
             style = MaterialTheme.typography.bodySmall,
             color = StudioTextSecondary,
           )
-          Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-              onClick = { onAutoTranscribe(false) },
-              enabled = !autoTranscribeState.isRunning && project.metadata.hasAudio,
-              shape = CircleShape,
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-              colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-              modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-            ) {
-              Text(
-                "Transcribe Offline",
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.SemiBold,
-              )
-            }
-            if (geminiSettings.enabled) {
-              OutlinedButton(
-                onClick = { onAutoTranscribe(true) },
-                enabled = !autoTranscribeState.isRunning && project.metadata.hasAudio,
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-              ) {
-                Text(
-                  "AI Transcribe",
-                  maxLines = 1,
-                  softWrap = false,
-                  overflow = TextOverflow.Ellipsis,
-                  color = StudioTextPrimary,
-                )
-              }
-            }
+          Button(
+            onClick = onAutoTranscribe,
+            enabled = !autoTranscribeState.isRunning && project.metadata.hasAudio,
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+          ) {
+            Text(
+              "Transcribe Offline",
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
+              fontWeight = FontWeight.SemiBold,
+            )
           }
         }
       }
@@ -548,53 +506,35 @@ internal fun StyleQuickPanel(
           }
         }
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        OutlinedButton(
+          onClick = onGenerate,
+          enabled = !isBusy,
+          shape = CircleShape,
+          modifier = Modifier.fillMaxWidth().height(44.dp).testTag("generate_compositions_button"),
         ) {
-          OutlinedButton(
-            onClick = { onGenerate(false) },
-            enabled = !isBusy,
-            shape = CircleShape,
-            modifier = Modifier.weight(1f).height(44.dp).testTag("generate_compositions_button"),
-          ) {
-            if (isBusy) {
-              CircularProgressIndicator(
-                color = StudioCoral,
-                modifier = Modifier.size(15.dp),
-                strokeWidth = 2.dp,
-              )
-              Spacer(Modifier.width(8.dp))
-              Text("Composing...", color = StudioTextPrimary, maxLines = 1, softWrap = false)
-            } else {
-              Icon(
-                Icons.Filled.AutoAwesome,
-                contentDescription = null,
-                tint = StudioCoral,
-                modifier = Modifier.size(16.dp),
-              )
-              Spacer(Modifier.width(6.dp))
-              Text(
-                text =
-                  if (geminiSettings.enabled && geminiSettings.usageMode != GeminiUsageMode.OFFLINE)
-                    "Regenerate (${geminiSettings.usageMode.label})"
-                  else "Generate Captions",
-                color = StudioTextPrimary,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-          if (geminiSettings.enabled && geminiSettings.usageMode != GeminiUsageMode.OFFLINE) {
-            OutlinedButton(
-              onClick = { onGenerate(true) },
-              enabled = !isBusy,
-              shape = CircleShape,
-              modifier = Modifier.height(44.dp),
-            ) {
-              Text("Offline", color = StudioTextSecondary, maxLines = 1, softWrap = false)
-            }
+          if (isBusy) {
+            CircularProgressIndicator(
+              color = StudioCoral,
+              modifier = Modifier.size(15.dp),
+              strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Composing...", color = StudioTextPrimary, maxLines = 1, softWrap = false)
+          } else {
+            Icon(
+              Icons.Filled.AutoAwesome,
+              contentDescription = null,
+              tint = StudioCoral,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+              text = "Generate Captions",
+              color = StudioTextPrimary,
+              maxLines = 1,
+              softWrap = false,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
         }
       }
@@ -745,9 +685,6 @@ internal fun ThemeWorkspacePanel(
   onPatchStyle: (String, ElementStylePatch, Boolean) -> Unit,
   onResetElementStyle: (String) -> Unit,
   onToggleDepthMask: () -> Unit,
-  onOpenTypographyStudio: () -> Unit,
-  onOpenAnimationStudio: () -> Unit,
-  onOpenPresets: () -> Unit,
 ) {
   if (activeComp == null) {
     StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
@@ -794,42 +731,9 @@ internal fun ThemeWorkspacePanel(
                 { onDeleteElement(activeEl.id) }
               } else null,
             onToggleCaptionDepthMask = onToggleDepthMask,
-            onOpenAnimationStudio = onOpenAnimationStudio,
+            onOpenAnimationStudio = null,
             showInlinePreview = true,
           )
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          OutlinedButton(
-            onClick = onOpenPresets,
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-          ) {
-            Text(
-              "All Presets",
-              color = StudioTextPrimary,
-              maxLines = 1,
-              softWrap = false,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          OutlinedButton(
-            onClick = onOpenTypographyStudio,
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-          ) {
-            Icon(Icons.Outlined.Palette, contentDescription = null, tint = StudioCoral, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(
-              "Full Studio",
-              color = StudioTextPrimary,
-              maxLines = 1,
-              softWrap = false,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
         }
       }
     }
@@ -854,7 +758,6 @@ internal fun FontWorkspacePanel(
   onPatchStyle: (String, ElementStylePatch, Boolean) -> Unit,
   onResetElementStyle: (String) -> Unit,
   onApplyPairing: (CuratedFontPairing) -> Unit,
-  onOpenTypographyStudio: () -> Unit,
 ) {
   val activeEl =
     activeComp?.elements?.firstOrNull { it.id == selectedElementId }
@@ -1064,27 +967,6 @@ internal fun FontWorkspacePanel(
             }
           }
         }
-
-        OutlinedButton(
-          onClick = onOpenTypographyStudio,
-          shape = CircleShape,
-          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_typography_studio_button"),
-        ) {
-          Text(
-            text = "Open Full Typography & Font Downloader",
-            color = StudioTextPrimary,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Spacer(Modifier.width(6.dp))
-          Icon(
-            Icons.AutoMirrored.Rounded.ArrowForward,
-            contentDescription = null,
-            tint = StudioCoral,
-            modifier = Modifier.size(16.dp),
-          )
-        }
       }
     }
   }
@@ -1103,7 +985,6 @@ internal fun TimingWorkspacePanel(
   playheadMs: Long,
   totalDurationMs: Long,
   isBusy: Boolean,
-  geminiSettings: GeminiSettings,
   speechState: SpeechRecognitionState,
   autoTranscribeState: AutoTranscribeUiState,
   transcribedSegments: List<VoskTextSegment>,
@@ -1114,8 +995,8 @@ internal fun TimingWorkspacePanel(
   onSelectComposition: (CaptionComposition) -> Unit,
   onJumpPrevCaption: () -> Unit,
   onJumpNextCaption: () -> Unit,
-  onGenerate: (Boolean) -> Unit,
-  onAutoTranscribe: (Boolean) -> Unit,
+  onGenerate: () -> Unit,
+  onAutoTranscribe: () -> Unit,
   onSplit: () -> Unit,
   onMerge: () -> Unit,
   onDelete: () -> Unit,
@@ -1127,8 +1008,7 @@ internal fun TimingWorkspacePanel(
   onImportSubtitles: () -> Unit,
   onToggleDictation: () -> Unit,
   onEditWordTiming: (Int) -> Unit,
-  onOpenAnimationStudio: () -> Unit,
-  onOpenPresets: () -> Unit,
+  onApplyAnimation: (String, ApplyScope, EntryAnimationType, ExitAnimationType, AnimationEasingType, Int, Int) -> Unit,
 ) {
   var subTab by remember { mutableIntStateOf(0) }
   var editingSegment by remember { mutableStateOf<VoskTextSegment?>(null) }
@@ -1332,7 +1212,7 @@ internal fun TimingWorkspacePanel(
                     color = StudioTextSecondary,
                   )
                   Button(
-                    onClick = { onGenerate(false) },
+                    onClick = onGenerate,
                     enabled = !isBusy,
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
@@ -1392,13 +1272,11 @@ internal fun TimingWorkspacePanel(
             AutoTranscribeControlCard(
               hasVideo = project.videoUriString.isNotBlank(),
               hasAudio = project.metadata.hasAudio,
-              geminiEnabled = geminiSettings.enabled,
               transcribeState = autoTranscribeState,
               playheadMs = playheadMs,
               totalDurationMs = totalDurationMs,
               onSeekMs = onSeekMs,
-              onAutoTranscribeOffline = { onAutoTranscribe(false) },
-              onAutoTranscribeOnline = { onAutoTranscribe(true) },
+              onAutoTranscribeOffline = onAutoTranscribe,
               activePackLabel = "Offline Pack: ${activePack.displayName} (~${activePack.approxSizeMb} MB)",
               isOfflinePackInstalled = activePackStatus?.isInstalled ?: true,
               isDownloadingPack = activePackStatus?.isDownloading == true,
@@ -1479,7 +1357,7 @@ internal fun TimingWorkspacePanel(
                 Button(
                   onClick = {
                     onUpdateTranscript(draftText)
-                    onGenerate(true)
+                    onGenerate()
                   },
                   colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
                   shape = CircleShape,
@@ -1607,41 +1485,150 @@ internal fun TimingWorkspacePanel(
         }
 
         else -> {
-          // Motion & Easing Summary
+          // Inline Whole-Caption Entry, Exit & Easing Controls (no bounce out of live preview)
+          var animScope by remember { mutableStateOf(ApplyScope.ALL_COMPOSITIONS) }
+          val currentEntry = activeComp?.entryAnimation ?: project.animationDefaults.entryAnimation
+          val currentExit = activeComp?.exitAnimation ?: project.animationDefaults.exitAnimation
+          val currentEasing = activeComp?.easing ?: project.animationDefaults.easing
+          val currentEntryMs = activeComp?.entryDurationMs ?: project.animationDefaults.entryDurationMs
+          val currentExitMs = activeComp?.exitDurationMs ?: project.animationDefaults.exitDurationMs
+          val chipColors =
+            FilterChipDefaults.filterChipColors(
+              selectedContainerColor = StudioCoralContainer,
+              selectedLabelColor = StudioCoralLight,
+              containerColor = StudioElevated,
+              labelColor = StudioTextSecondary,
+            )
+
+          fun applyTransition(
+            entry: EntryAnimationType = currentEntry,
+            exit: ExitAnimationType = currentExit,
+            easing: AnimationEasingType = currentEasing,
+            entryMs: Int = currentEntryMs,
+            exitMs: Int = currentExitMs,
+          ) {
+            val compId = activeComp?.id ?: project.compositions.firstOrNull()?.id ?: ""
+            onApplyAnimation(compId, animScope, entry, exit, easing, entryMs, exitMs)
+          }
+
           StudioGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-              Text("Motion & Transitions", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
-              if (activeComp != null) {
-                Row(
-                  modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                  StudioSubtlePill(text = "In: ${activeComp.entryAnimation.label} (${activeComp.entryDurationMs}ms)")
-                  StudioSubtlePill(text = "Out: ${activeComp.exitAnimation.label}")
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text("Motion & Transitions", style = MaterialTheme.typography.titleSmall, color = StudioTextPrimary)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                  listOf(
+                    ApplyScope.SINGLE_COMPOSITION to "Active",
+                    ApplyScope.ALL_COMPOSITIONS to "All",
+                  ).forEach { (scopeOpt, label) ->
+                    val chosen = animScope == scopeOpt
+                    Surface(
+                      onClick = { animScope = scopeOpt },
+                      color = if (chosen) StudioCoralContainer else StudioElevated,
+                      shape = CircleShape,
+                      modifier =
+                        Modifier.heightIn(min = 34.dp)
+                          .border(1.dp, if (chosen) StudioCoral else StudioHairline, CircleShape),
+                    ) {
+                      Box(modifier = Modifier.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                          text = label,
+                          style = MaterialTheme.typography.labelSmall,
+                          color = if (chosen) StudioCoralLight else StudioTextSecondary,
+                          maxLines = 1,
+                          softWrap = false,
+                        )
+                      }
+                    }
+                  }
                 }
-                Text(
-                  text = "Easing curve: ${activeComp.easing.label}",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = StudioTextSecondary,
-                )
               }
-              Button(
-                onClick = onOpenAnimationStudio,
-                colors = ButtonDefaults.buttonColors(containerColor = StudioCoral, contentColor = Color.White),
-                shape = CircleShape,
-                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_animation_studio_button"),
+
+              Text("Entry Animation", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
               ) {
-                Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Customize Entry, Exit & Easing", fontWeight = FontWeight.SemiBold)
+                EntryAnimationType.entries.forEach { entry ->
+                  val isSelected = currentEntry == entry
+                  FilterChip(
+                    selected = isSelected,
+                    onClick = { applyTransition(entry = entry) },
+                    shape = CircleShape,
+                    colors = chipColors,
+                    border =
+                      FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = isSelected,
+                        borderColor = StudioHairline,
+                        selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
+                      ),
+                    label = { Text(entry.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
+                  )
+                }
               }
-              OutlinedButton(
-                onClick = onOpenPresets,
-                shape = CircleShape,
-                modifier = Modifier.fillMaxWidth().height(46.dp),
+
+              Text("Exit Animation", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
               ) {
-                Text("Browse All 8 Editorial Presets", color = StudioTextPrimary)
+                ExitAnimationType.entries.forEach { exit ->
+                  val isSelected = currentExit == exit
+                  FilterChip(
+                    selected = isSelected,
+                    onClick = { applyTransition(exit = exit) },
+                    shape = CircleShape,
+                    colors = chipColors,
+                    border =
+                      FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = isSelected,
+                        borderColor = StudioHairline,
+                        selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
+                      ),
+                    label = { Text(exit.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
+                  )
+                }
               }
+
+              Text("Easing Curve", style = MaterialTheme.typography.labelMedium, color = StudioTextSecondary)
+              Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                AnimationEasingType.entries.forEach { easing ->
+                  val isSelected = currentEasing == easing
+                  FilterChip(
+                    selected = isSelected,
+                    onClick = { applyTransition(easing = easing) },
+                    shape = CircleShape,
+                    colors = chipColors,
+                    border =
+                      FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = isSelected,
+                        borderColor = StudioHairline,
+                        selectedBorderColor = StudioCoral.copy(alpha = 0.7f),
+                      ),
+                    label = { Text(easing.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
+                  )
+                }
+              }
+
+              AccessibleSliderControl(
+                label = "Entry Speed",
+                valueText = "${currentEntryMs} ms",
+                value = currentEntryMs.toFloat(),
+                valueRange = 80f..350f,
+                step = 15f,
+                onValueChange = { applyTransition(entryMs = it.roundToInt()) },
+                onValueChangeFinished = { applyTransition(entryMs = currentEntryMs) },
+                testTagPrefix = "caption_entry_speed",
+              )
             }
           }
         }

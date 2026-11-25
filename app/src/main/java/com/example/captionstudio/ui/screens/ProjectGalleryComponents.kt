@@ -67,7 +67,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.foundation.Canvas
-import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
@@ -344,7 +343,6 @@ internal fun GalleryHeroCreateCard(
   onImportVideo: () -> Unit,
   onBrowseFiles: () -> Unit,
   onCreateScript: () -> Unit,
-  onOpenStyleCloner: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   StudioGlassCard(
@@ -395,13 +393,6 @@ internal fun GalleryHeroCreateCard(
         modifier = Modifier.testTag("import_video_button"),
       )
 
-      // Viral On-Device Reference Video Style Cloner CTA
-      CloneStyleBannerPill(
-        enabled = !isBusy,
-        onClick = onOpenStyleCloner,
-        modifier = Modifier.testTag("clone_style_hero_button"),
-      )
-
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -421,76 +412,6 @@ internal fun GalleryHeroCreateCard(
           modifier = Modifier.weight(1f).testTag("new_project_button"),
         )
       }
-    }
-  }
-}
-
-@Composable
-private fun CloneStyleBannerPill(
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val interactionSource = remember { MutableInteractionSource() }
-  Row(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .height(48.dp)
-        .studioPressScale(enabled = enabled, interactionSource = interactionSource)
-        .clip(CircleShape)
-        .background(
-          Brush.horizontalGradient(
-            listOf(StudioCoralContainer.copy(alpha = 0.55f), StudioObsidian.copy(alpha = 0.85f))
-          )
-        )
-        .border(1.dp, StudioCoral.copy(alpha = 0.48f), CircleShape)
-        .clickable(
-          enabled = enabled,
-          interactionSource = interactionSource,
-          indication = ripple(bounded = true, color = StudioCoralLight),
-          onClick = onClick,
-        )
-        .padding(horizontal = 16.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.SpaceBetween,
-  ) {
-    Row(
-      modifier = Modifier.weight(1f),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = Icons.Rounded.AutoFixHigh,
-        contentDescription = null,
-        tint = StudioCoralLight,
-        modifier = Modifier.size(18.dp),
-      )
-      Spacer(Modifier.width(9.dp))
-      Text(
-        text = stringResource(R.string.gallery_clone_style_title),
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = StudioTextPrimary,
-        maxLines = 1,
-        softWrap = false,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-    Spacer(Modifier.width(8.dp))
-    Surface(
-      color = StudioCoral.copy(alpha = 0.24f),
-      shape = CircleShape,
-      modifier = Modifier.border(1.dp, StudioCoral.copy(alpha = 0.55f), CircleShape),
-    ) {
-      Text(
-        text = stringResource(R.string.gallery_clone_style_badge),
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-        color = StudioCoralLight,
-        maxLines = 1,
-        softWrap = false,
-        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-      )
     }
   }
 }
@@ -833,7 +754,6 @@ internal fun ProjectGalleryCard(
 @Composable
 internal fun GalleryEmptyStateCard(
   onLaunchDemoProject: () -> Unit = {},
-  onOpenStyleCloner: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -980,46 +900,33 @@ internal fun GalleryEmptyStateCard(
         }
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      Button(
+        onClick = onLaunchDemoProject,
+        shape = CircleShape,
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = StudioCoral,
+            contentColor = Color.White,
+          ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+        modifier =
+          Modifier.fillMaxWidth()
+            .height(48.dp)
+            .testTag("onboarding_launch_demo_button"),
       ) {
-        Button(
-          onClick = onLaunchDemoProject,
-          shape = CircleShape,
-          colors =
-            ButtonDefaults.buttonColors(
-              containerColor = StudioCoral,
-              contentColor = Color.White,
-            ),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-          modifier =
-            Modifier.weight(1.2f)
-              .height(48.dp)
-              .testTag("onboarding_launch_demo_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Rounded.PlayArrow,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-          )
-          Spacer(Modifier.width(6.dp))
-          Text(
-            text = stringResource(R.string.gallery_onboarding_launch_demo),
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        SecondaryActionPill(
-          icon = Icons.Rounded.AutoFixHigh,
-          label = stringResource(R.string.onboarding_clone_cta),
-          enabled = true,
-          onClick = onOpenStyleCloner,
-          modifier = Modifier.weight(0.9f).testTag("onboarding_clone_style_button"),
+        Icon(
+          imageVector = Icons.Rounded.PlayArrow,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+          text = stringResource(R.string.gallery_onboarding_launch_demo),
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          softWrap = false,
+          overflow = TextOverflow.Ellipsis,
         )
       }
     }
