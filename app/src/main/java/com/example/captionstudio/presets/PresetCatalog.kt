@@ -2,19 +2,165 @@ package com.example.captionstudio.presets
 
 import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.CaptionComposition
+import com.example.captionstudio.domain.model.DesignerFrameStyle
 import com.example.captionstudio.domain.model.EntryAnimationType
 import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.FontRole
 import com.example.captionstudio.domain.model.FontRoleOverrides
 import com.example.captionstudio.domain.model.HierarchyLevel
+import com.example.captionstudio.domain.model.LetterAnimationStyle
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeRegion
+import com.example.captionstudio.domain.model.SpatialLayoutMode
 import com.example.captionstudio.domain.model.StudioPalette
+import com.example.captionstudio.domain.model.TextSurfaceStyle
+import com.example.captionstudio.domain.model.VectorFlourish
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 
 object PresetCatalog {
 
   const val DEFAULT_PRESET_ID = "editorial"
+
+  const val SIGNATURE_BEAT_POLARITY_ID = "sig_beat_polarity"
+  const val SIGNATURE_EDITORIAL_HALO_ID = "sig_editorial_halo"
+  const val SIGNATURE_STORY_ARC_ID = "sig_story_arc"
+  const val SIGNATURE_HANDCRAFTED_FRAME_ID = "sig_handcrafted_frame"
+
+  val signaturePresetIds: Set<String> =
+    setOf(
+      SIGNATURE_BEAT_POLARITY_ID,
+      SIGNATURE_EDITORIAL_HALO_ID,
+      SIGNATURE_STORY_ARC_ID,
+      SIGNATURE_HANDCRAFTED_FRAME_ID,
+    )
+
+  val signaturePresets: List<PresetDefinition> =
+    listOf(
+      PresetDefinition(
+        id = SIGNATURE_BEAT_POLARITY_ID,
+        name = "BEAT POLARITY",
+        tagline = "Space Grotesk • Beat Typing + Cream/Navy Cards",
+        description =
+          "Tight lowercase geometric grotesk with beat-synced character reveal typing and alternating high-contrast warm cream and midnight navy gold-accent polarity cards.",
+        heavyFontId = "space_grotesk",
+        supportingFontId = "space_grotesk",
+        expressiveFontId = "plus_jakarta_sans",
+        primaryColorHex = "#111318",
+        dominantColorHex = "#C8A252",
+        expressiveColorHex = "#EFECE4",
+        dramaticColorHex = "#C8A252",
+        defaultEntryAnim = EntryAnimationType.FADE_POP,
+        defaultExitAnim = ExitAnimationType.CLEAN_CUT,
+        defaultEasing = AnimationEasingType.DECELERATE,
+        entryDurationMs = 110,
+        exitDurationMs = 95,
+        dominantScaleMultiplier = 0.98f,
+        expressiveScaleMultiplier = 1.0f,
+        shadowRadiusFactor = 0.7f,
+        preferredRegions =
+          listOf(SafeRegion.LOWER_CENTER, SafeRegion.CENTER, SafeRegion.UPPER_CENTER),
+        sampleSentence = "design every beat with contrast",
+        preferUppercase = false,
+        defaultLetterAnimation = LetterAnimationStyle.CHAR_REVEAL,
+        defaultSurfaceStyle = TextSurfaceStyle.STANDARD,
+        defaultDesignerFrame = DesignerFrameStyle.POLARITY_CARD,
+        defaultSpatialMode = SpatialLayoutMode.STANDARD,
+        defaultFlourish = VectorFlourish.NONE,
+      ),
+      PresetDefinition(
+        id = SIGNATURE_EDITORIAL_HALO_ID,
+        name = "EDITORIAL HALO",
+        tagline = "Inter + Playfair Italic • Halation + L/R Split",
+        description =
+          "Tight-tracked luminous Inter white typography with 140ms film halation bloom, +8% optically matched italic Playfair Display accents, and subject-framing left/right split emphasis blocks.",
+        heavyFontId = "inter",
+        supportingFontId = "inter",
+        expressiveFontId = "playfair_display",
+        primaryColorHex = StudioPalette.WHITE,
+        dominantColorHex = StudioPalette.WHITE,
+        expressiveColorHex = StudioPalette.CREAM,
+        dramaticColorHex = StudioPalette.GOLD_AMBER,
+        defaultEntryAnim = EntryAnimationType.SLIDE_UP,
+        defaultExitAnim = ExitAnimationType.FADE_DROP,
+        defaultEasing = AnimationEasingType.DECELERATE,
+        entryDurationMs = 150,
+        exitDurationMs = 130,
+        dominantScaleMultiplier = 1.04f,
+        expressiveScaleMultiplier = 1.08f,
+        shadowRadiusFactor = 0.85f,
+        preferredRegions =
+          listOf(SafeRegion.CENTER, SafeRegion.LOWER_CENTER, SafeRegion.UPPER_CENTER),
+        sampleSentence = "Quiet craft beats loud noise",
+        preferUppercase = false,
+        defaultLetterAnimation = LetterAnimationStyle.NONE,
+        defaultSurfaceStyle = TextSurfaceStyle.HALATION_BLOOM,
+        defaultDesignerFrame = DesignerFrameStyle.NONE,
+        defaultSpatialMode = SpatialLayoutMode.LEFT_RIGHT_SPLIT,
+        defaultFlourish = VectorFlourish.NONE,
+      ),
+      PresetDefinition(
+        id = SIGNATURE_STORY_ARC_ID,
+        name = "STORY ARC",
+        tagline = "Gold Italic Arcs • 3D Inflated Hero Bursts",
+        description =
+          "Warm-gold italic whispers curving gently above the subject along a quadratic Bezier arc, punctuated by glossy 3D inflated hero bursts on peak words.",
+        heavyFontId = "archivo_black",
+        supportingFontId = "playfair_display",
+        expressiveFontId = "cormorant_garamond",
+        primaryColorHex = "#FFD166",
+        dominantColorHex = StudioPalette.GOLD_AMBER,
+        expressiveColorHex = "#FFD166",
+        dramaticColorHex = StudioPalette.ORANGE,
+        defaultEntryAnim = EntryAnimationType.SCALE_RISE,
+        defaultExitAnim = ExitAnimationType.FADE_DROP,
+        defaultEasing = AnimationEasingType.SPRING_OVERSHOOT,
+        entryDurationMs = 165,
+        exitDurationMs = 135,
+        dominantScaleMultiplier = 1.12f,
+        expressiveScaleMultiplier = 1.08f,
+        shadowRadiusFactor = 1.0f,
+        preferredRegions =
+          listOf(SafeRegion.UPPER_CENTER, SafeRegion.CENTER, SafeRegion.LOWER_CENTER),
+        sampleSentence = "Watch this story unfold",
+        preferUppercase = false,
+        defaultLetterAnimation = LetterAnimationStyle.STAGGER_POP,
+        defaultSurfaceStyle = TextSurfaceStyle.INFLATED_3D,
+        defaultDesignerFrame = DesignerFrameStyle.NONE,
+        defaultSpatialMode = SpatialLayoutMode.CURVED_ARC_PATH,
+        defaultFlourish = VectorFlourish.SPARKLE_BURST,
+      ),
+      PresetDefinition(
+        id = SIGNATURE_HANDCRAFTED_FRAME_ID,
+        name = "HANDCRAFTED FRAME",
+        tagline = "Condensed Serif • 15fps Hand-Boil + Ink Frames",
+        description =
+          "Condensed editorial white italic serif baseline interrupted by 15fps boiling hand-lettered marker words, Figma dashed transform boxes, paper cutout badges, and self-drawing ink flourishes.",
+        heavyFontId = "caveat",
+        supportingFontId = "libre_baskerville",
+        expressiveFontId = "caveat",
+        primaryColorHex = StudioPalette.WHITE,
+        dominantColorHex = "#17181C",
+        expressiveColorHex = StudioPalette.GOLD_AMBER,
+        dramaticColorHex = StudioPalette.CORAL,
+        defaultEntryAnim = EntryAnimationType.FADE_POP,
+        defaultExitAnim = ExitAnimationType.FADE_DROP,
+        defaultEasing = AnimationEasingType.SPRING_OVERSHOOT,
+        entryDurationMs = 145,
+        exitDurationMs = 120,
+        dominantScaleMultiplier = 1.06f,
+        expressiveScaleMultiplier = 1.14f,
+        shadowRadiusFactor = 0.9f,
+        preferredRegions =
+          listOf(SafeRegion.LOWER_CENTER, SafeRegion.UPPER_CENTER, SafeRegion.CENTER),
+        sampleSentence = "Make every detail feel handcrafted",
+        preferUppercase = false,
+        defaultLetterAnimation = LetterAnimationStyle.HAND_BOIL_15FPS,
+        defaultSurfaceStyle = TextSurfaceStyle.CONDENSED_EDITORIAL,
+        defaultDesignerFrame = DesignerFrameStyle.DASHED_SELECTION_BOX,
+        defaultSpatialMode = SpatialLayoutMode.STANDARD,
+        defaultFlourish = VectorFlourish.SWOOSH_UNDERLINE,
+      ),
+    )
 
   val classicKineticPresets: List<PresetDefinition> =
     listOf(
@@ -247,7 +393,7 @@ object PresetCatalog {
     )
 
   val kineticPresets: List<PresetDefinition> =
-    classicKineticPresets + ExpandedPresets.expandedKineticPresets
+    signaturePresets + classicKineticPresets + ExpandedPresets.expandedKineticPresets
 
   val normalPresets: List<PresetDefinition> = ExpandedPresets.normalPresets
 
@@ -297,6 +443,17 @@ object PresetCatalog {
       val preserveCoords = true
       val effectiveRegion = if (comp.region == SafeRegion.CUSTOM) SafeRegion.CUSTOM else comp.region
 
+      // Branch S: Switching to one of the 4 flagship Signature Presets -> dedicated signature choreography
+      if (preset.id in signaturePresetIds) {
+        return@mapIndexed com.example.captionstudio.engine.LocalCompositionEngine.buildSignatureComposition(
+          comp = comp,
+          phraseIndex = idx,
+          preset = preset,
+          analysisReport = analysisReport,
+          fontOverrides = fontOverrides,
+        )
+      }
+
       // Branch A: Switching to a NORMAL everyday caption preset -> clean single-block uniform caption + karaoke
       if (preset.category == com.example.captionstudio.domain.model.PresetCategory.NORMAL) {
         val normalEl =
@@ -320,6 +477,7 @@ object PresetCatalog {
           exitDurationMs = preset.exitDurationMs,
           depthLayer = com.example.captionstudio.domain.model.DepthLayer.IN_FRONT,
           styleVariant = com.example.captionstudio.domain.model.CompositionStyleVariant.STANDARD,
+          spatialMode = preset.defaultSpatialMode,
           backgroundMaskEnabled = preset.preferBehindSubject,
           elements = listOf(normalEl),
         )
@@ -353,6 +511,7 @@ object PresetCatalog {
             if (hasBehind || preset.preferBehindSubject) com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT
             else com.example.captionstudio.domain.model.DepthLayer.IN_FRONT,
           styleVariant = com.example.captionstudio.domain.model.CompositionStyleVariant.HERO_STACK,
+          spatialMode = preset.defaultSpatialMode,
           backgroundMaskEnabled = hasBehind || preset.preferBehindSubject,
           elements = rebuiltElements,
         )
@@ -423,6 +582,12 @@ object PresetCatalog {
             karaokeMode = preset.defaultKaraokeMode,
             karaokeHighlightColorHex = preset.karaokeHighlightColorHex,
             karaokePillColorHex = preset.karaokePillColorHex,
+            letterAnimation = preset.defaultLetterAnimation,
+            surfaceStyle = preset.defaultSurfaceStyle,
+            tiltDegrees = 0f,
+            designerFrame = preset.defaultDesignerFrame,
+            flourish = preset.defaultFlourish,
+            polarityVariantIndex = 0,
           )
         }
       comp.copy(
@@ -437,6 +602,7 @@ object PresetCatalog {
         depthLayer =
           if (preset.preferBehindSubject) com.example.captionstudio.domain.model.DepthLayer.BEHIND_SUBJECT
           else comp.depthLayer,
+        spatialMode = preset.defaultSpatialMode,
         backgroundMaskEnabled = if (preset.preferBehindSubject) true else comp.backgroundMaskEnabled,
         elements = baseElements,
       )

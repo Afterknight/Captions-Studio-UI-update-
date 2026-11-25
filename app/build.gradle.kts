@@ -131,6 +131,7 @@ dependencies {
   implementation(libs.androidx.media3.common)
   implementation(libs.mlkit.segmentation.selfie)
   implementation(libs.mlkit.text.recognition)
+  implementation(libs.mlkit.face.detection)
   implementation(libs.vosk.android) {
     exclude(group = "net.java.dev.jna", module = "jna")
   }

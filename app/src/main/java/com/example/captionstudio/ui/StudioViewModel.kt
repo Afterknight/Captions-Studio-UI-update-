@@ -1242,6 +1242,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                       patch.karaokePillColorHex != null -> patch.karaokePillColorHex
                       else -> el.karaokePillColorHex
                     },
+                  letterAnimation = patch.letterAnimation ?: el.letterAnimation,
+                  surfaceStyle = patch.surfaceStyle ?: el.surfaceStyle,
+                  tiltDegrees = (patch.tiltDegrees ?: el.tiltDegrees).coerceIn(-18f, 18f),
+                  designerFrame = patch.designerFrame ?: el.designerFrame,
+                  flourish = patch.flourish ?: el.flourish,
                 )
               }
             }
@@ -1256,6 +1261,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           val nextCompDepth =
             if (patch.depthLayer == DepthLayer.IN_FRONT && !anyBehind) DepthLayer.IN_FRONT
             else comp.depthLayer
+          val nextSpatialMode = patch.spatialMode ?: comp.spatialMode
 
           if (patch.safeRegion != null) {
             comp.copy(
@@ -1264,12 +1270,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               anchorYFraction = patch.safeRegion.defaultAnchorY,
               backgroundMaskEnabled = nextBgMask,
               depthLayer = nextCompDepth,
+              spatialMode = nextSpatialMode,
               elements = newElements,
             )
           } else {
             comp.copy(
               backgroundMaskEnabled = nextBgMask,
               depthLayer = nextCompDepth,
+              spatialMode = nextSpatialMode,
               elements = newElements,
             )
           }
@@ -1980,6 +1988,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       presetId = project.presetId,
       exportPrefs = effectivePrefs,
       outputTitle = project.title,
+      faceAnchorSamples = project.analysisReport.faceAnchorSamples,
+      audioEnergyEnvelope10ms =
+        com.example.captionstudio.media.AudioExtractionService.getCachedNormalizedEnvelope(
+          project.videoUriString
+        ),
     )
   }
 

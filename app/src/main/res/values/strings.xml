@@ -87,7 +87,7 @@
     <string name="pro_sheet_title">Caption Studio Pro</string>
     <string name="pro_sheet_badge_free">Creator-First</string>
     <string name="pro_sheet_badge_active">Preview Active</string>
-    <string name="pro_sheet_free_promise">Core Offline Captions, Behind-Subject Depth, 36 Presets &amp; 1080p Export are 100% Free Forever</string>
+    <string name="pro_sheet_free_promise">Core Offline Captions, Behind-Subject Depth, 40 Presets &amp; 1080p Export are 100% Free Forever</string>
     <string name="pro_sheet_perks_header">Optional Pro Perks</string>
     <string name="pro_perk_watermark_title">Remove Corner Watermark</string>
     <string name="pro_perk_watermark_desc">Export clean, unbranded videos ready for clients and social feeds.</string>

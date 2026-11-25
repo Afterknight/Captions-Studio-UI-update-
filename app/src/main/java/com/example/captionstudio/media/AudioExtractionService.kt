@@ -29,9 +29,14 @@ data class ExtractedAudioTrack(
   val energyEnvelope10ms: FloatArray,
   val speechSegments: List<SpeechSegment>,
   val waveformBins: List<Float>,
+  val normalizedEnvelope10ms: FloatArray = AudioExtractionService.normalizeEnergyEnvelope10ms(energyEnvelope10ms),
 ) {
   val hasSpokenAudio: Boolean
     get() = pcmMono16k.isNotEmpty() && speechSegments.isNotEmpty()
+
+  /** Fast O(1) normalized vocal energy lookup (0f..1f) at [timeMs]. */
+  fun getNormalizedEnergyAt(timeMs: Long): Float =
+    AudioExtractionService.getNormalizedEnergyAt(normalizedEnvelope10ms, timeMs)
 }
 
 /**
@@ -43,6 +48,94 @@ object AudioExtractionService {
   private const val TARGET_SAMPLE_RATE = 16000
   private const val MAX_DECODE_DURATION_MS = 180_000L // Cap safely at 3 min for ordinary devices
   private const val ENVELOPE_FRAME_MS = 10
+
+  private val cacheLock = Any()
+  private val normalizedEnvelopeCache =
+    object : LinkedHashMap<String, FloatArray>(8, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?): Boolean =
+        size > 6
+    }
+  @Volatile private var activeNormalizedEnvelope: FloatArray? = null
+
+  /**
+   * Normalizes a raw 10ms RMS energy envelope into [0f..1f] using noise-floor subtraction
+   * (20th percentile) and robust peak scaling (95th percentile) so quiet and loud clips both
+   * drive smooth voice-breathing typography without clipping.
+   */
+  fun normalizeEnergyEnvelope10ms(rawEnvelope10ms: FloatArray): FloatArray {
+    if (rawEnvelope10ms.isEmpty()) return FloatArray(0)
+    val sorted = rawEnvelope10ms.sortedArray()
+    val floor = sorted[(sorted.size * 0.20f).toInt().coerceIn(0, sorted.lastIndex)]
+    val peak = sorted[(sorted.size * 0.95f).toInt().coerceIn(0, sorted.lastIndex)]
+    val span = (peak - floor).coerceAtLeast(0.012f)
+    if (peak < 0.004f) return FloatArray(rawEnvelope10ms.size)
+    return FloatArray(rawEnvelope10ms.size) { i ->
+      ((rawEnvelope10ms[i] - floor) / span).coerceIn(0f, 1f)
+    }
+  }
+
+  /**
+   * Stores a normalized 10ms RMS envelope for [videoKey] and marks it as the active lookup envelope.
+   */
+  fun cacheNormalizedEnvelope(videoKey: String, rawEnvelope10ms: FloatArray): FloatArray {
+    val normalized = normalizeEnergyEnvelope10ms(rawEnvelope10ms)
+    if (videoKey.isNotBlank() && normalized.isNotEmpty()) {
+      synchronized(cacheLock) {
+        normalizedEnvelopeCache[videoKey] = normalized
+        activeNormalizedEnvelope = normalized
+      }
+    }
+    return normalized
+  }
+
+  fun getCachedNormalizedEnvelope(videoKey: String): FloatArray? {
+    if (videoKey.isBlank()) return null
+    return synchronized(cacheLock) {
+      normalizedEnvelopeCache[videoKey]?.also { activeNormalizedEnvelope = it }
+    }
+  }
+
+  /**
+   * Fast O(1) lookup of normalized vocal RMS energy (0f..1f) from a pre-normalized 10ms envelope,
+   * linearly interpolated between adjacent 10ms buckets for jitter-free 60fps animation.
+   */
+  fun getNormalizedEnergyAt(normalizedEnvelope10ms: FloatArray, timeMs: Long): Float {
+    val size = normalizedEnvelope10ms.size
+    if (size == 0 || timeMs < 0L) return 0f
+    val exactIndex = timeMs.toFloat() / ENVELOPE_FRAME_MS.toFloat()
+    val idx0 = exactIndex.toInt()
+    if (idx0 >= size - 1) return normalizedEnvelope10ms[size - 1].coerceIn(0f, 1f)
+    val frac = exactIndex - idx0
+    val e0 = normalizedEnvelope10ms[idx0]
+    val e1 = normalizedEnvelope10ms[idx0 + 1]
+    return (e0 + (e1 - e0) * frac).coerceIn(0f, 1f)
+  }
+
+  /**
+   * Fast O(1) normalized vocal RMS energy lookup (0f..1f) against the currently cached active track.
+   */
+  fun getNormalizedEnergyAt(timeMs: Long): Float {
+    val env = activeNormalizedEnvelope ?: return 0f
+    return getNormalizedEnergyAt(env, timeMs)
+  }
+
+  /**
+   * Fast O(1) normalized vocal RMS energy lookup (0f..1f) for a specific [videoKey].
+   */
+  fun getNormalizedEnergyAt(videoKey: String, timeMs: Long): Float {
+    val env = synchronized(cacheLock) { normalizedEnvelopeCache[videoKey] } ?: activeNormalizedEnvelope ?: return 0f
+    return getNormalizedEnergyAt(env, timeMs)
+  }
+
+  /**
+   * Returns a cached 10ms normalized RMS envelope for [videoUri], or extracts and caches it once.
+   */
+  suspend fun extractNormalizedEnvelope10ms(context: Context, videoUri: Uri): FloatArray? {
+    val key = videoUri.toString()
+    getCachedNormalizedEnvelope(key)?.let { return it }
+    val extracted = extractAudioTrack(context, videoUri) ?: return null
+    return extracted.normalizedEnvelope10ms.takeIf { it.isNotEmpty() }
+  }
 
   suspend fun extractAudioTrack(
     context: Context,
@@ -159,6 +252,7 @@ object AudioExtractionService {
 
         val durationMs = (pcm16k.size * 1000L) / TARGET_SAMPLE_RATE
         val envelope = computeEnergyEnvelope10ms(pcm16k)
+        val normalizedEnvelope = cacheNormalizedEnvelope(videoUri.toString(), envelope)
         val segments = detectSpeechSegments(envelope)
         val waveform = downsampleWaveform(envelope, 48)
         onProgress(1f)
@@ -170,6 +264,7 @@ object AudioExtractionService {
           energyEnvelope10ms = envelope,
           speechSegments = segments,
           waveformBins = waveform,
+          normalizedEnvelope10ms = normalizedEnvelope,
         )
       } catch (_: Exception) {
         null

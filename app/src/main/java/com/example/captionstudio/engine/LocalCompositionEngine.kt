@@ -5,6 +5,7 @@ import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CompositionElement
 import com.example.captionstudio.domain.model.CompositionStyleVariant
 import com.example.captionstudio.domain.model.DepthLayer
+import com.example.captionstudio.domain.model.DesignerFrameStyle
 import com.example.captionstudio.domain.model.EntryAnimationType
 import com.example.captionstudio.domain.model.ExitAnimationType
 import com.example.captionstudio.domain.model.FontRole
@@ -13,11 +14,15 @@ import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.HookPacingTemplate
 import com.example.captionstudio.domain.model.KaraokeHighlightMode
 import com.example.captionstudio.domain.model.LayerMotionEffect
+import com.example.captionstudio.domain.model.LetterAnimationStyle
 import com.example.captionstudio.domain.model.PresetCategory
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.SafeRegion
+import com.example.captionstudio.domain.model.SpatialLayoutMode
 import com.example.captionstudio.domain.model.StudioPalette
 import com.example.captionstudio.domain.model.TextAlignment
+import com.example.captionstudio.domain.model.TextSurfaceStyle
+import com.example.captionstudio.domain.model.VectorFlourish
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 import com.example.captionstudio.domain.model.WordTiming
 import com.example.captionstudio.presets.PresetCatalog
@@ -172,6 +177,37 @@ object LocalCompositionEngine {
         if (shot != null) shot.subjectCoverage > 0.08f || shot.headVetoRect != null
         else globalHasSubject
       val isSplitActive = shot?.isSplitScreen ?: analysisReport.isSplitScreenDetected
+
+      // Branch cleanly for flagship Signature Presets (BEAT POLARITY, EDITORIAL HALO, STORY ARC, HANDCRAFTED FRAME)
+      if (preset.id in PresetCatalog.signaturePresetIds) {
+        if (shotIndex != lastShotKey) {
+          lastShotKey = shotIndex
+          anchoredShotRegion = null
+        }
+        val (sigRegion, updatedShotAnchor) =
+          chooseFrameAwareRegion(
+            styleVariant = CompositionStyleVariant.HERO_STACK,
+            shot = shot,
+            currentShotAnchor = anchoredShotRegion,
+            rankedRegions = regions,
+            analysisReport = analysisReport,
+            shotHasSubject = shotHasSubject,
+          )
+        anchoredShotRegion = updatedShotAnchor
+        return@mapIndexed composeSignatureComposition(
+          id = UUID.randomUUID().toString(),
+          startMs = startMs,
+          endMs = endMs,
+          rawSentence = rawSentence,
+          words = phraseWords,
+          phraseIndex = phraseIdx,
+          preset = preset,
+          defaultRegion = sigRegion,
+          customRegionCoords = null,
+          shot = shot,
+          fontOverrides = fontOverrides,
+        )
+      }
 
       // Branch cleanly for everyday NORMAL caption presets (uniform 1–2 line subtitle / karaoke block)
       if (preset.category == PresetCategory.NORMAL) {
@@ -461,6 +497,698 @@ object LocalCompositionEngine {
         karaokePillColorHex = preset.karaokePillColorHex,
       )
     }
+  }
+
+  /**
+   * Re-styles an existing [CaptionComposition] using one of the 4 flagship Signature Presets while
+   * preserving transcript text, exact word timings, composition ID, and custom manual drag coords.
+   */
+  fun buildSignatureComposition(
+    comp: CaptionComposition,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    analysisReport: VideoAnalysisReport,
+    fontOverrides: FontRoleOverrides = FontRoleOverrides(),
+  ): CaptionComposition {
+    val words =
+      if (comp.wordMappings.isNotEmpty()) {
+        comp.wordMappings
+      } else {
+        buildProvisionalWordTimings(
+          comp.originalText.ifBlank { comp.elements.joinToString(" ") { it.text } },
+          max(400L, comp.endMs - comp.startMs),
+        ).map { it.copy(startMs = it.startMs + comp.startMs, endMs = it.endMs + comp.startMs) }
+      }
+    val midMs = (comp.startMs + comp.endMs) / 2L
+    val shot = analysisReport.shotAnalyses.getOrNull(findShotIndexForTime(midMs, analysisReport))
+    val customCoords =
+      if (comp.region == SafeRegion.CUSTOM) comp.anchorXFraction to comp.anchorYFraction else null
+    val fallbackRegion =
+      if (comp.region != SafeRegion.CUSTOM) comp.region else SafeRegion.LOWER_CENTER
+    return composeSignatureComposition(
+      id = comp.id,
+      startMs = comp.startMs,
+      endMs = comp.endMs,
+      rawSentence = comp.originalText.ifBlank { words.joinToString(" ") { it.word } },
+      words = words,
+      phraseIndex = phraseIndex,
+      preset = preset,
+      defaultRegion = fallbackRegion,
+      customRegionCoords = customCoords,
+      shot = shot,
+      fontOverrides = fontOverrides,
+    )
+  }
+
+  private fun composeSignatureComposition(
+    id: String,
+    startMs: Long,
+    endMs: Long,
+    rawSentence: String,
+    words: List<WordTiming>,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    defaultRegion: SafeRegion,
+    customRegionCoords: Pair<Float, Float>?,
+    shot: com.example.captionstudio.domain.model.ShotVisualAnalysis?,
+    fontOverrides: FontRoleOverrides,
+  ): CaptionComposition {
+    val safeWords =
+      if (words.isNotEmpty()) words
+      else listOf(WordTiming(rawSentence.ifBlank { "Caption" }, startMs, endMs, isEstimated = true))
+    val heavyFont = fontOverrides.heavyFontId ?: preset.heavyFontId
+    val supportingFont = fontOverrides.supportingFontId ?: preset.supportingFontId
+    val expressiveFont = fontOverrides.expressiveFontId ?: preset.expressiveFontId
+
+    return when (preset.id) {
+      PresetCatalog.SIGNATURE_BEAT_POLARITY_ID ->
+        composeBeatPolarity(
+          id = id,
+          startMs = startMs,
+          endMs = endMs,
+          rawSentence = rawSentence,
+          words = safeWords,
+          phraseIndex = phraseIndex,
+          preset = preset,
+          groteskFont = supportingFont,
+          defaultRegion = defaultRegion,
+          customRegionCoords = customRegionCoords,
+        )
+
+      PresetCatalog.SIGNATURE_EDITORIAL_HALO_ID ->
+        composeEditorialHalo(
+          id = id,
+          startMs = startMs,
+          endMs = endMs,
+          rawSentence = rawSentence,
+          words = safeWords,
+          phraseIndex = phraseIndex,
+          preset = preset,
+          sansFont = supportingFont,
+          serifFont = expressiveFont,
+          defaultRegion = defaultRegion,
+          customRegionCoords = customRegionCoords,
+        )
+
+      PresetCatalog.SIGNATURE_STORY_ARC_ID ->
+        composeStoryArc(
+          id = id,
+          startMs = startMs,
+          endMs = endMs,
+          rawSentence = rawSentence,
+          words = safeWords,
+          phraseIndex = phraseIndex,
+          preset = preset,
+          heavyFont = heavyFont,
+          whisperFont = supportingFont,
+          customRegionCoords = customRegionCoords,
+        )
+
+      else ->
+        composeHandcraftedFrame(
+          id = id,
+          startMs = startMs,
+          endMs = endMs,
+          rawSentence = rawSentence,
+          words = safeWords,
+          phraseIndex = phraseIndex,
+          preset = preset,
+          serifFont = supportingFont,
+          markerFont = expressiveFont,
+          defaultRegion = defaultRegion,
+          customRegionCoords = customRegionCoords,
+          shot = shot,
+        )
+    }
+  }
+
+  /**
+   * Signature Preset 1: BEAT POLARITY
+   * Tight lowercase geometric grotesk (-0.03em tracking) with CHAR_REVEAL beat typing and
+   * alternating POLARITY_CARD cream (#EFECE4 / #111318) and midnight navy (#0E1A2B / #EFECE4 + #C8A252 gold) flips.
+   */
+  private fun composeBeatPolarity(
+    id: String,
+    startMs: Long,
+    endMs: Long,
+    rawSentence: String,
+    words: List<WordTiming>,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    groteskFont: String,
+    defaultRegion: SafeRegion,
+    customRegionCoords: Pair<Float, Float>?,
+  ): CaptionComposition {
+    val isDarkNavyCard = phraseIndex % 2 != 0
+    val inkHex = if (isDarkNavyCard) "#EFECE4" else "#111318"
+    val lowerText = words.joinToString(" ") { it.word }.trim().lowercase()
+    val region =
+      if (customRegionCoords != null) SafeRegion.CUSTOM
+      else if (defaultRegion == SafeRegion.UPPER_CENTER || defaultRegion == SafeRegion.CENTER) defaultRegion
+      else SafeRegion.LOWER_CENTER
+
+    val element =
+      CompositionElement(
+        id = UUID.randomUUID().toString(),
+        text = lowerText,
+        role = FontRole.SUPPORTING,
+        hierarchyLevel = HierarchyLevel.SUPPORTING,
+        fontFamilyId = groteskFont,
+        fontWeight = 700,
+        isItalic = false,
+        fontSizeSp = (24.5f * preset.dominantScaleMultiplier).coerceIn(19f, 34f),
+        colorHex = inkHex,
+        alignment = TextAlignment.CENTER,
+        uppercase = false,
+        letterSpacingEm = -0.03f,
+        wordIndices = words.indices.toList(),
+        inlineRowGroup = 0,
+        shadowEnabled = false,
+        shadowIntensity = 0.6f,
+        depthLayer = DepthLayer.IN_FRONT,
+        letterAnimation = LetterAnimationStyle.CHAR_REVEAL,
+        surfaceStyle = TextSurfaceStyle.STANDARD,
+        designerFrame = DesignerFrameStyle.POLARITY_CARD,
+        polarityVariantIndex = phraseIndex,
+        flourish = VectorFlourish.NONE,
+      )
+
+    return CaptionComposition(
+      id = id,
+      startMs = startMs,
+      endMs = endMs,
+      originalText = rawSentence,
+      region = region,
+      anchorXFraction = customRegionCoords?.first ?: region.defaultAnchorX,
+      anchorYFraction = customRegionCoords?.second ?: region.defaultAnchorY,
+      entryAnimation = preset.defaultEntryAnim,
+      exitAnimation = preset.defaultExitAnim,
+      easing = preset.defaultEasing,
+      entryDurationMs = preset.entryDurationMs,
+      exitDurationMs = preset.exitDurationMs,
+      elements = listOf(element),
+      wordMappings = words,
+      depthLayer = DepthLayer.IN_FRONT,
+      styleVariant = CompositionStyleVariant.HERO_STACK,
+      spatialMode = SpatialLayoutMode.STANDARD,
+      backgroundMaskEnabled = false,
+    )
+  }
+
+  /**
+   * Signature Preset 2: EDITORIAL HALO
+   * Tight-tracked white Inter + HALATION_BLOOM glow, +8% optically matched italic Playfair Display
+   * accents, and LEFT_RIGHT_SPLIT subject-flanking framing on 2–4 word emphasis blocks.
+   */
+  private fun composeEditorialHalo(
+    id: String,
+    startMs: Long,
+    endMs: Long,
+    rawSentence: String,
+    words: List<WordTiming>,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    sansFont: String,
+    serifFont: String,
+    defaultRegion: SafeRegion,
+    customRegionCoords: Pair<Float, Float>?,
+  ): CaptionComposition {
+    val scores = words.mapIndexed { idx, wt -> idx to scoreWordSalience(wt.word, idx, words.size) }
+    val emphasisIdx = scores.maxByOrNull { it.second }?.first ?: words.lastIndex
+    val maxSalience = scores.maxOfOrNull { it.second } ?: 0f
+    val useLeftRightSplit =
+      words.size in 2..4 && (maxSalience >= 1.8f || phraseIndex % 2 == 0)
+
+    val sansSizeSp = 24f * preset.dominantScaleMultiplier
+    val serifSizeSp = sansSizeSp * 1.08f // +8% optical match for italic Playfair Display next to Inter
+
+    val elements =
+      if (useLeftRightSplit) {
+        val splitAt =
+          when (words.size) {
+            2 -> 1
+            3 -> if (emphasisIdx == 0) 1 else 2
+            else -> 2
+          }
+        val leftRange = 0 until splitAt
+        val rightRange = splitAt until words.size
+        val emphasisOnRight = emphasisIdx >= splitAt
+
+        val leftEl =
+          CompositionElement(
+            id = UUID.randomUUID().toString(),
+            text = leftRange.joinToString(" ") { words[it].word },
+            role = if (!emphasisOnRight) FontRole.EXPRESSIVE else FontRole.SUPPORTING,
+            hierarchyLevel = if (!emphasisOnRight) HierarchyLevel.EXPRESSIVE else HierarchyLevel.SUPPORTING,
+            fontFamilyId = if (!emphasisOnRight) serifFont else sansFont,
+            fontWeight = if (!emphasisOnRight) 600 else 600,
+            isItalic = !emphasisOnRight,
+            fontSizeSp = if (!emphasisOnRight) serifSizeSp else sansSizeSp,
+            colorHex = if (!emphasisOnRight) StudioPalette.CREAM else StudioPalette.WHITE,
+            glowColorHex = StudioPalette.WHITE,
+            alignment = TextAlignment.RIGHT,
+            uppercase = false,
+            letterSpacingEm = if (!emphasisOnRight) 0f else -0.025f,
+            wordIndices = leftRange.toList(),
+            inlineRowGroup = 0,
+            shadowEnabled = true,
+            shadowIntensity = 0.9f,
+            depthLayer = DepthLayer.IN_FRONT,
+            letterAnimation = LetterAnimationStyle.NONE,
+            surfaceStyle = TextSurfaceStyle.HALATION_BLOOM,
+            designerFrame = DesignerFrameStyle.NONE,
+            flourish = VectorFlourish.NONE,
+          )
+        val rightEl =
+          CompositionElement(
+            id = UUID.randomUUID().toString(),
+            text = rightRange.joinToString(" ") { words[it].word },
+            role = if (emphasisOnRight) FontRole.EXPRESSIVE else FontRole.SUPPORTING,
+            hierarchyLevel = if (emphasisOnRight) HierarchyLevel.EXPRESSIVE else HierarchyLevel.SUPPORTING,
+            fontFamilyId = if (emphasisOnRight) serifFont else sansFont,
+            fontWeight = 600,
+            isItalic = emphasisOnRight,
+            fontSizeSp = if (emphasisOnRight) serifSizeSp else sansSizeSp,
+            colorHex = if (emphasisOnRight) StudioPalette.CREAM else StudioPalette.WHITE,
+            glowColorHex = StudioPalette.WHITE,
+            alignment = TextAlignment.LEFT,
+            uppercase = false,
+            letterSpacingEm = if (emphasisOnRight) 0f else -0.025f,
+            staggerDelayMs = 60,
+            wordIndices = rightRange.toList(),
+            inlineRowGroup = 0,
+            shadowEnabled = true,
+            shadowIntensity = 0.9f,
+            depthLayer = DepthLayer.IN_FRONT,
+            letterAnimation = LetterAnimationStyle.NONE,
+            surfaceStyle = TextSurfaceStyle.HALATION_BLOOM,
+            designerFrame = DesignerFrameStyle.NONE,
+            flourish = VectorFlourish.NONE,
+          )
+        listOf(leftEl, rightEl)
+      } else {
+        // Inline tight-tracked white Inter + +8% italic Playfair Display accent
+        val built = mutableListOf<CompositionElement>()
+        var idx = 0
+        while (idx < words.size) {
+          if (idx == emphasisIdx) {
+            built.add(
+              CompositionElement(
+                id = UUID.randomUUID().toString(),
+                text = words[idx].word,
+                role = FontRole.EXPRESSIVE,
+                hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+                fontFamilyId = serifFont,
+                fontWeight = 600,
+                isItalic = true,
+                fontSizeSp = serifSizeSp,
+                colorHex = StudioPalette.CREAM,
+                glowColorHex = StudioPalette.WHITE,
+                alignment = TextAlignment.CENTER,
+                uppercase = false,
+                letterSpacingEm = 0f,
+                staggerDelayMs = if (idx > 0) 55 else 0,
+                wordIndices = listOf(idx),
+                inlineRowGroup = 0,
+                shadowEnabled = true,
+                shadowIntensity = 0.9f,
+                depthLayer = DepthLayer.IN_FRONT,
+                letterAnimation = LetterAnimationStyle.NONE,
+                surfaceStyle = TextSurfaceStyle.HALATION_BLOOM,
+                designerFrame = DesignerFrameStyle.NONE,
+                flourish = VectorFlourish.NONE,
+              )
+            )
+            idx++
+          } else {
+            val span = mutableListOf<Int>()
+            while (idx < words.size && idx != emphasisIdx) {
+              span.add(idx)
+              idx++
+            }
+            built.add(
+              CompositionElement(
+                id = UUID.randomUUID().toString(),
+                text = span.joinToString(" ") { words[it].word },
+                role = FontRole.SUPPORTING,
+                hierarchyLevel = HierarchyLevel.SUPPORTING,
+                fontFamilyId = sansFont,
+                fontWeight = 600,
+                isItalic = false,
+                fontSizeSp = sansSizeSp,
+                colorHex = StudioPalette.WHITE,
+                glowColorHex = StudioPalette.WHITE,
+                alignment = TextAlignment.CENTER,
+                uppercase = false,
+                letterSpacingEm = -0.025f,
+                wordIndices = span,
+                inlineRowGroup = 0,
+                shadowEnabled = true,
+                shadowIntensity = 0.9f,
+                depthLayer = DepthLayer.IN_FRONT,
+                letterAnimation = LetterAnimationStyle.NONE,
+                surfaceStyle = TextSurfaceStyle.HALATION_BLOOM,
+                designerFrame = DesignerFrameStyle.NONE,
+                flourish = VectorFlourish.NONE,
+              )
+            )
+          }
+        }
+        built
+      }
+
+    val region =
+      when {
+        customRegionCoords != null -> SafeRegion.CUSTOM
+        useLeftRightSplit -> SafeRegion.CENTER
+        else -> defaultRegion
+      }
+    return CaptionComposition(
+      id = id,
+      startMs = startMs,
+      endMs = endMs,
+      originalText = rawSentence,
+      region = region,
+      anchorXFraction = customRegionCoords?.first ?: 0.50f,
+      anchorYFraction = customRegionCoords?.second ?: if (useLeftRightSplit) 0.48f else region.defaultAnchorY,
+      entryAnimation = preset.defaultEntryAnim,
+      exitAnimation = preset.defaultExitAnim,
+      easing = preset.defaultEasing,
+      entryDurationMs = preset.entryDurationMs,
+      exitDurationMs = preset.exitDurationMs,
+      elements = elements,
+      wordMappings = words,
+      depthLayer = DepthLayer.IN_FRONT,
+      styleVariant = CompositionStyleVariant.HERO_STACK,
+      spatialMode = if (useLeftRightSplit) SpatialLayoutMode.LEFT_RIGHT_SPLIT else SpatialLayoutMode.STANDARD,
+      backgroundMaskEnabled = false,
+    )
+  }
+
+  /**
+   * Signature Preset 3: STORY ARC
+   * Warm-gold italic whispers (#FFD166) curving overhead via CURVED_ARC_PATH paired with glossy
+   * INFLATED_3D hero bursts on peak words.
+   */
+  private fun composeStoryArc(
+    id: String,
+    startMs: Long,
+    endMs: Long,
+    rawSentence: String,
+    words: List<WordTiming>,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    heavyFont: String,
+    whisperFont: String,
+    customRegionCoords: Pair<Float, Float>?,
+  ): CaptionComposition {
+    val scores = words.mapIndexed { idx, wt -> idx to scoreWordSalience(wt.word, idx, words.size) }
+    val peakIdx = scores.maxByOrNull { it.second }?.first ?: words.lastIndex
+    val maxSalience = scores.maxOfOrNull { it.second } ?: 0f
+    val hasDramatic = words.any { cleanToken(it.word) in dramaticWords || it.word.endsWith("!") }
+
+    val includeInflatedBurst =
+      words.size == 1 ||
+        hasDramatic ||
+        maxSalience >= 3.0f ||
+        (words.size >= 2 && phraseIndex % 2 == 1)
+
+    val elements = mutableListOf<CompositionElement>()
+    if (words.size == 1) {
+      elements.add(
+        CompositionElement(
+          id = UUID.randomUUID().toString(),
+          text = words.first().word.trim('.', ',', ';', ':'),
+          role = FontRole.HEAVY,
+          hierarchyLevel = HierarchyLevel.DOMINANT,
+          fontFamilyId = heavyFont,
+          fontWeight = 900,
+          isItalic = false,
+          fontSizeSp = (54f * preset.dominantScaleMultiplier).coerceIn(38f, 66f),
+          colorHex = StudioPalette.GOLD_AMBER,
+          alignment = TextAlignment.CENTER,
+          uppercase = true,
+          letterSpacingEm = -0.02f,
+          wordIndices = listOf(0),
+          inlineRowGroup = 0,
+          shadowEnabled = true,
+          shadowIntensity = 1.0f,
+          depthLayer = DepthLayer.IN_FRONT,
+          letterAnimation = LetterAnimationStyle.STAGGER_POP,
+          surfaceStyle = TextSurfaceStyle.INFLATED_3D,
+          designerFrame = DesignerFrameStyle.NONE,
+          flourish = VectorFlourish.SPARKLE_BURST,
+        )
+      )
+    } else if (includeInflatedBurst) {
+      // Pair overhead curved warm-gold italic whisper on row 0 with INFLATED_3D hero burst on row 1
+      val whisperIndices = words.indices.filter { it != peakIdx }
+      if (whisperIndices.isNotEmpty()) {
+        elements.add(
+          CompositionElement(
+            id = UUID.randomUUID().toString(),
+            text = whisperIndices.joinToString(" ") { words[it].word },
+            role = FontRole.EXPRESSIVE,
+            hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+            fontFamilyId = whisperFont,
+            fontWeight = 600,
+            isItalic = true,
+            fontSizeSp = (25f * preset.expressiveScaleMultiplier).coerceIn(20f, 34f),
+            colorHex = "#FFD166",
+            glowColorHex = "#FFD166",
+            alignment = TextAlignment.CENTER,
+            uppercase = false,
+            letterSpacingEm = 0.01f,
+            wordIndices = whisperIndices,
+            inlineRowGroup = 0,
+            shadowEnabled = true,
+            shadowIntensity = 0.9f,
+            depthLayer = DepthLayer.IN_FRONT,
+            letterAnimation = LetterAnimationStyle.STAGGER_POP,
+            surfaceStyle = TextSurfaceStyle.STANDARD,
+            designerFrame = DesignerFrameStyle.NONE,
+            flourish = VectorFlourish.NONE,
+          )
+        )
+      }
+      val peakWord = words[peakIdx].word.trim('.', ',', ';', ':')
+      elements.add(
+        CompositionElement(
+          id = UUID.randomUUID().toString(),
+          text = peakWord,
+          role = FontRole.HEAVY,
+          hierarchyLevel = HierarchyLevel.DOMINANT,
+          fontFamilyId = heavyFont,
+          fontWeight = 900,
+          isItalic = false,
+          fontSizeSp = (48f * preset.dominantScaleMultiplier).coerceIn(36f, 64f),
+          colorHex = if (hasDramatic) preset.dramaticColorHex else StudioPalette.GOLD_AMBER,
+          alignment = TextAlignment.CENTER,
+          uppercase = true,
+          letterSpacingEm = -0.02f,
+          staggerDelayMs = 80,
+          wordIndices = listOf(peakIdx),
+          inlineRowGroup = 1,
+          shadowEnabled = true,
+          shadowIntensity = 1.0f,
+          depthLayer = DepthLayer.IN_FRONT,
+          letterAnimation = LetterAnimationStyle.STAGGER_POP,
+          surfaceStyle = TextSurfaceStyle.INFLATED_3D,
+          designerFrame = DesignerFrameStyle.NONE,
+          flourish = VectorFlourish.SPARKLE_BURST,
+        )
+      )
+    } else {
+      // Pure warm-gold italic whisper gliding along the overhead quadratic Bezier arc
+      elements.add(
+        CompositionElement(
+          id = UUID.randomUUID().toString(),
+          text = words.joinToString(" ") { it.word },
+          role = FontRole.EXPRESSIVE,
+          hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+          fontFamilyId = whisperFont,
+          fontWeight = 600,
+          isItalic = true,
+          fontSizeSp = (26.5f * preset.expressiveScaleMultiplier).coerceIn(21f, 34f),
+          colorHex = "#FFD166",
+          glowColorHex = "#FFD166",
+          alignment = TextAlignment.CENTER,
+          uppercase = false,
+          letterSpacingEm = 0.01f,
+          wordIndices = words.indices.toList(),
+          inlineRowGroup = 0,
+          shadowEnabled = true,
+          shadowIntensity = 0.9f,
+          depthLayer = DepthLayer.IN_FRONT,
+          letterAnimation = LetterAnimationStyle.STAGGER_POP,
+          surfaceStyle = TextSurfaceStyle.STANDARD,
+          designerFrame = DesignerFrameStyle.NONE,
+          flourish = VectorFlourish.NONE,
+        )
+      )
+    }
+
+    val region = if (customRegionCoords != null) SafeRegion.CUSTOM else SafeRegion.UPPER_CENTER
+    return CaptionComposition(
+      id = id,
+      startMs = startMs,
+      endMs = endMs,
+      originalText = rawSentence,
+      region = region,
+      anchorXFraction = customRegionCoords?.first ?: 0.50f,
+      anchorYFraction = customRegionCoords?.second ?: 0.24f,
+      entryAnimation = preset.defaultEntryAnim,
+      exitAnimation = preset.defaultExitAnim,
+      easing = preset.defaultEasing,
+      entryDurationMs = preset.entryDurationMs,
+      exitDurationMs = preset.exitDurationMs,
+      elements = elements,
+      wordMappings = words,
+      depthLayer = DepthLayer.IN_FRONT,
+      styleVariant = CompositionStyleVariant.HERO_STACK,
+      spatialMode = SpatialLayoutMode.CURVED_ARC_PATH,
+      backgroundMaskEnabled = false,
+    )
+  }
+
+  /**
+   * Signature Preset 4: HANDCRAFTED FRAME
+   * CONDENSED_EDITORIAL white italic serif baseline interrupted on accent words by HAND_BOIL_15FPS
+   * marker lettering, alternating DASHED_SELECTION_BOX frames & PAPER_CUTOUT_PILL badges, and
+   * self-drawing SWOOSH_UNDERLINE / HAND_CIRCLE ink flourishes.
+   */
+  private fun composeHandcraftedFrame(
+    id: String,
+    startMs: Long,
+    endMs: Long,
+    rawSentence: String,
+    words: List<WordTiming>,
+    phraseIndex: Int,
+    preset: PresetDefinition,
+    serifFont: String,
+    markerFont: String,
+    defaultRegion: SafeRegion,
+    customRegionCoords: Pair<Float, Float>?,
+    shot: com.example.captionstudio.domain.model.ShotVisualAnalysis?,
+  ): CaptionComposition {
+    val scores = words.mapIndexed { idx, wt -> idx to scoreWordSalience(wt.word, idx, words.size) }
+    val accentIdx = scores.maxByOrNull { it.second }?.first ?: words.lastIndex
+
+    // Alternate DASHED_SELECTION_BOX + SWOOSH_UNDERLINE with PAPER_CUTOUT_PILL + HAND_CIRCLE
+    val usePaperCutout = phraseIndex % 2 != 0
+    val accentFrame =
+      if (usePaperCutout) DesignerFrameStyle.PAPER_CUTOUT_PILL
+      else DesignerFrameStyle.DASHED_SELECTION_BOX
+    val accentFlourish =
+      if (usePaperCutout) VectorFlourish.HAND_CIRCLE
+      else VectorFlourish.SWOOSH_UNDERLINE
+    val accentColor =
+      if (usePaperCutout) "#17181C" else preset.expressiveColorHex
+    val accentTilt = if (phraseIndex % 2 == 0) -2.2f else 2.0f
+
+    val elements = mutableListOf<CompositionElement>()
+    var rowGroup = 0
+    var idx = 0
+    while (idx < words.size) {
+      if (idx == accentIdx) {
+        elements.add(
+          CompositionElement(
+            id = UUID.randomUUID().toString(),
+            text = words[idx].word.trim('.', ',', ';', ':'),
+            role = FontRole.EXPRESSIVE,
+            hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+            fontFamilyId = markerFont,
+            fontWeight = 700,
+            isItalic = false,
+            fontSizeSp = (34f * preset.expressiveScaleMultiplier).coerceIn(26f, 46f),
+            colorHex = accentColor,
+            alignment = TextAlignment.CENTER,
+            uppercase = false,
+            staggerDelayMs = if (idx > 0) 65 else 0,
+            wordIndices = listOf(idx),
+            inlineRowGroup = rowGroup++,
+            shadowEnabled = !usePaperCutout,
+            shadowIntensity = 0.85f,
+            depthLayer = DepthLayer.IN_FRONT,
+            letterAnimation = LetterAnimationStyle.HAND_BOIL_15FPS,
+            surfaceStyle = TextSurfaceStyle.STANDARD,
+            tiltDegrees = accentTilt,
+            designerFrame = accentFrame,
+            flourish = accentFlourish,
+          )
+        )
+        idx++
+      } else {
+        val span = mutableListOf<Int>()
+        while (idx < words.size && idx != accentIdx) {
+          span.add(idx)
+          idx++
+          if (span.size >= 4) break
+        }
+        elements.add(
+          CompositionElement(
+            id = UUID.randomUUID().toString(),
+            text = span.joinToString(" ") { words[it].word },
+            role = FontRole.SUPPORTING,
+            hierarchyLevel = HierarchyLevel.SUPPORTING,
+            fontFamilyId = serifFont,
+            fontWeight = 600,
+            isItalic = true,
+            fontSizeSp = 22f,
+            colorHex = StudioPalette.WHITE,
+            alignment = TextAlignment.CENTER,
+            uppercase = false,
+            letterSpacingEm = -0.01f,
+            wordIndices = span,
+            inlineRowGroup = rowGroup++,
+            shadowEnabled = true,
+            shadowIntensity = 0.9f,
+            depthLayer = DepthLayer.IN_FRONT,
+            letterAnimation = LetterAnimationStyle.NONE,
+            surfaceStyle = TextSurfaceStyle.CONDENSED_EDITORIAL,
+            tiltDegrees = 0f,
+            designerFrame = DesignerFrameStyle.NONE,
+            flourish = VectorFlourish.NONE,
+          )
+        )
+      }
+    }
+
+    val region =
+      if (customRegionCoords != null) SafeRegion.CUSTOM
+      else defaultRegion
+    val zoneMetrics = shot?.zoneMetrics?.get(region)
+    val guardedElements =
+      if (zoneMetrics != null) {
+        elements.map { el ->
+          // Never cover a custom designer frame with an auto-readability pill
+          if (el.designerFrame != DesignerFrameStyle.NONE) el
+          else applyAutoReadabilityGuard(listOf(el), zoneMetrics).first()
+        }
+      } else {
+        elements
+      }
+
+    return CaptionComposition(
+      id = id,
+      startMs = startMs,
+      endMs = endMs,
+      originalText = rawSentence,
+      region = region,
+      anchorXFraction = customRegionCoords?.first ?: region.defaultAnchorX,
+      anchorYFraction = customRegionCoords?.second ?: region.defaultAnchorY,
+      entryAnimation = preset.defaultEntryAnim,
+      exitAnimation = preset.defaultExitAnim,
+      easing = preset.defaultEasing,
+      entryDurationMs = preset.entryDurationMs,
+      exitDurationMs = preset.exitDurationMs,
+      elements = guardedElements,
+      wordMappings = words,
+      depthLayer = DepthLayer.IN_FRONT,
+      styleVariant = CompositionStyleVariant.HERO_STACK,
+      spatialMode = SpatialLayoutMode.STANDARD,
+      backgroundMaskEnabled = false,
+    )
   }
 
   /**

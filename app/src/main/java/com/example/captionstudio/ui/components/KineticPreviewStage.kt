@@ -9,8 +9,10 @@ import android.view.LayoutInflater
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -233,6 +235,27 @@ fun KineticPreviewStage(
   var playerError by remember(videoUriString) { mutableStateOf<String?>(null) }
 
   val hasVideo = videoUriString.isNotBlank()
+  var audioEnergyEnvelope by remember(videoUriString) {
+    mutableStateOf(
+      com.example.captionstudio.media.AudioExtractionService.getCachedNormalizedEnvelope(videoUriString)
+    )
+  }
+  LaunchedEffect(videoUriString, hasVideo) {
+    if (hasVideo && audioEnergyEnvelope == null) {
+      val loaded =
+        withContext(Dispatchers.IO) {
+          runCatching {
+            com.example.captionstudio.media.AudioExtractionService.extractNormalizedEnvelope10ms(
+              context,
+              Uri.parse(videoUriString),
+            )
+          }.getOrNull()
+        }
+      if (loaded != null) {
+        audioEnergyEnvelope = loaded
+      }
+    }
+  }
   val exoPlayer =
     remember(videoUriString) {
       if (hasVideo) {
@@ -707,6 +730,8 @@ fun KineticPreviewStage(
           selectedCompositionId = latestSelectedId,
           drawSelectionGuide = !isPlaying || isDraggingCanvas,
           videoContentRect = activeMaskVideoRect,
+          faceAnchorSamples = analysisReport.faceAnchorSamples,
+          audioEnergyEnvelope10ms = audioEnergyEnvelope,
         )
       }
 

@@ -3,6 +3,12 @@ package com.example.captionstudio.media
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.ImageFormat
+import android.media.Image
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -606,18 +612,352 @@ object SubjectMaskProcessor {
     return Bitmap.createScaledBitmap(src, targetW, targetH, true)
   }
 
+  internal enum class MonotonicDecodeAction {
+    REUSE_CURRENT,
+    STEP_FORWARD,
+    SEEK_AND_STEP,
+  }
+
+  /**
+   * Pure decision helper for sequential monotonic export decoding:
+   * - Reuses the already-decoded frame when target is within half a frame (<= 16ms) of current PTS.
+   * - Steps strictly forward without seeking during normal chronological Media3 export.
+   * - Only issues a sync seek if target jumps backwards (> 250ms) or skips ahead by > 2.2s
+   *   (e.g., long gaps with no behind-subject captions).
+   */
+  internal fun computeMonotonicDecodeAction(
+    currentFramePtsUs: Long,
+    targetTimeUs: Long,
+  ): MonotonicDecodeAction {
+    if (currentFramePtsUs >= 0L && targetTimeUs <= currentFramePtsUs + 16_000L && targetTimeUs >= currentFramePtsUs - 250_000L) {
+      return MonotonicDecodeAction.REUSE_CURRENT
+    }
+    if (currentFramePtsUs >= 0L && (targetTimeUs < currentFramePtsUs - 250_000L || targetTimeUs - currentFramePtsUs > 2_200_000L)) {
+      return MonotonicDecodeAction.SEEK_AND_STEP
+    }
+    return MonotonicDecodeAction.STEP_FORWARD
+  }
+
+  /**
+   * Sequential monotonic MediaExtractor + MediaCodec decoder tailored for Media3 Transformer export.
+   *
+   * Eliminates the O(N * GOP) random-seek penalty of MediaMetadataRetriever.getFrameAtTime() by
+   * advancing forward in chronological presentationTimeUs order, skipping YUV->RGB conversion on
+   * dropped intermediate frames, and subsampling directly from YUV_420_888 planes into a
+   * pre-allocated downscaled Bitmap + IntArray scratch buffer.
+   */
+  private class SequentialVideoFrameDecoder(
+    context: Context,
+    videoUri: Uri,
+    private val maxDim: Int,
+  ) : AutoCloseable {
+    private var extractor: MediaExtractor? = null
+    private var codec: MediaCodec? = null
+    private var isInitialized = false
+    private var sawInputEos = false
+    private var sawOutputEos = false
+    private var rotationDegrees = 0
+    private var currentPtsUs: Long = -1L
+
+    private var scratchBitmap: Bitmap? = null
+    private var scratchPixels: IntArray? = null
+    private val bufferInfo = MediaCodec.BufferInfo()
+
+    init {
+      var localExtractor: MediaExtractor? = null
+      var localCodec: MediaCodec? = null
+      var succeeded = false
+      try {
+        localExtractor = MediaExtractor().apply { setDataSource(context, videoUri, null) }
+        var videoTrackIndex = -1
+        var trackFormat: MediaFormat? = null
+        for (i in 0 until localExtractor.trackCount) {
+          val fmt = localExtractor.getTrackFormat(i)
+          val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
+          if (mime.startsWith("video/")) {
+            videoTrackIndex = i
+            trackFormat = fmt
+            break
+          }
+        }
+        if (videoTrackIndex >= 0 && trackFormat != null) {
+          localExtractor.selectTrack(videoTrackIndex)
+          rotationDegrees =
+            if (trackFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+              ((trackFormat.getInteger(MediaFormat.KEY_ROTATION) % 360) + 360) % 360
+            } else {
+              0
+            }
+          val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
+          // Request flexible YUV420 output for zero-copy Image plane access on API 21+
+          runCatching {
+            trackFormat.setInteger(
+              MediaFormat.KEY_COLOR_FORMAT,
+              MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
+            )
+          }
+          localCodec = MediaCodec.createDecoderByType(mime)
+          localCodec.configure(trackFormat, null, null, 0)
+          localCodec.start()
+          extractor = localExtractor
+          codec = localCodec
+          isInitialized = true
+          succeeded = true
+        }
+      } catch (_: Throwable) {
+        succeeded = false
+      } finally {
+        if (!succeeded) {
+          runCatching { localCodec?.stop() }
+          runCatching { localCodec?.release() }
+          runCatching { localExtractor?.release() }
+        }
+      }
+    }
+
+    val isReady: Boolean
+      get() = isInitialized
+
+    /**
+     * Advances forward chronologically to the first decoded frame at or near [targetTimeUs]
+     * and returns the reusable pre-allocated downscaled [Bitmap] (caller must NOT recycle it).
+     */
+    fun decodeFrameAtTimeUs(targetTimeUs: Long): Bitmap? {
+      if (!isInitialized) return null
+      val ext = extractor ?: return null
+      val dec = codec ?: return null
+      val clampedUs = targetTimeUs.coerceAtLeast(0L)
+
+      when (computeMonotonicDecodeAction(currentPtsUs, clampedUs)) {
+        MonotonicDecodeAction.REUSE_CURRENT -> {
+          val existing = scratchBitmap
+          if (existing != null && !existing.isRecycled) return existing
+        }
+        MonotonicDecodeAction.SEEK_AND_STEP -> {
+          try {
+            ext.seekTo(clampedUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            dec.flush()
+            sawInputEos = false
+            sawOutputEos = false
+            currentPtsUs = -1L
+          } catch (_: Throwable) {
+            return scratchBitmap?.takeIf { !it.isRecycled }
+          }
+        }
+        MonotonicDecodeAction.STEP_FORWARD -> Unit
+      }
+
+      if (sawOutputEos) {
+        return scratchBitmap?.takeIf { !it.isRecycled }
+      }
+
+      var safetyIterations = 0
+      val maxIterations = 600
+      try {
+        while (!sawOutputEos && safetyIterations++ < maxIterations) {
+          if (!sawInputEos) {
+            val inIdx = dec.dequeueInputBuffer(5_000L)
+            if (inIdx >= 0) {
+              val inBuf = dec.getInputBuffer(inIdx)
+              if (inBuf != null) {
+                val sampleSize = ext.readSampleData(inBuf, 0)
+                if (sampleSize < 0) {
+                  dec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                  sawInputEos = true
+                } else {
+                  val sampleTimeUs = ext.sampleTime.coerceAtLeast(0L)
+                  dec.queueInputBuffer(inIdx, 0, sampleSize, sampleTimeUs, 0)
+                  ext.advance()
+                }
+              }
+            }
+          }
+
+          val outIdx = dec.dequeueOutputBuffer(bufferInfo, 5_000L)
+          when {
+            outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
+            outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+            outIdx >= 0 -> {
+              val isEos = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+              val framePtsUs = bufferInfo.presentationTimeUs
+              val hasData = bufferInfo.size > 0
+              val reachedTarget = framePtsUs + 16_000L >= clampedUs || isEos
+
+              if (hasData && reachedTarget) {
+                var decodedOk = false
+                try {
+                  val image = dec.getOutputImage(outIdx)
+                  if (image != null) {
+                    try {
+                      decodedOk = convertYuvImageToScratchBitmap(image)
+                    } finally {
+                      runCatching { image.close() }
+                    }
+                  }
+                } catch (_: Throwable) {
+                  decodedOk = false
+                }
+                dec.releaseOutputBuffer(outIdx, false)
+                if (isEos) sawOutputEos = true
+                if (decodedOk) {
+                  currentPtsUs = framePtsUs
+                  return scratchBitmap?.takeIf { !it.isRecycled }
+                }
+              } else {
+                // Fast-skip intermediate frames without paying YUV->RGB conversion cost
+                dec.releaseOutputBuffer(outIdx, false)
+                if (isEos) sawOutputEos = true
+              }
+            }
+          }
+        }
+      } catch (_: Throwable) {
+        return scratchBitmap?.takeIf { !it.isRecycled }
+      }
+      return scratchBitmap?.takeIf { !it.isRecycled }
+    }
+
+    /**
+     * Subsamples YUV_420_888 directly into a pre-allocated downscaled ARGB_8888 Bitmap while
+     * honoring container rotation (0/90/180/270) in a single cache-friendly pass.
+     */
+    private fun convertYuvImageToScratchBitmap(image: Image): Boolean {
+      if (image.format != ImageFormat.YUV_420_888) return false
+      val planes = image.planes
+      if (planes.size < 3) return false
+
+      val crop = image.cropRect
+      val srcW = crop.width().coerceAtLeast(1)
+      val srcH = crop.height().coerceAtLeast(1)
+      val cropLeft = crop.left
+      val cropTop = crop.top
+
+      val rotated = rotationDegrees == 90 || rotationDegrees == 270
+      val orientedW = if (rotated) srcH else srcW
+      val orientedH = if (rotated) srcW else srcH
+      val scale = min(1f, maxDim.toFloat() / max(orientedW, orientedH).toFloat())
+      val dstW = max(16, (orientedW * scale).toInt())
+      val dstH = max(16, (orientedH * scale).toInt())
+
+      val needed = dstW * dstH
+      val pixels =
+        if (scratchPixels != null && scratchPixels!!.size >= needed) {
+          scratchPixels!!
+        } else {
+          IntArray(needed).also { scratchPixels = it }
+        }
+      val bmp =
+        if (scratchBitmap != null &&
+          !scratchBitmap!!.isRecycled &&
+          scratchBitmap!!.width == dstW &&
+          scratchBitmap!!.height == dstH
+        ) {
+          scratchBitmap!!
+        } else {
+          runCatching { scratchBitmap?.recycle() }
+          Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888).also { scratchBitmap = it }
+        }
+
+      val yBuf = planes[0].buffer
+      val uBuf = planes[1].buffer
+      val vBuf = planes[2].buffer
+      val yRowStride = planes[0].rowStride
+      val yPixStride = planes[0].pixelStride
+      val uRowStride = planes[1].rowStride
+      val uPixStride = planes[1].pixelStride
+      val vRowStride = planes[2].rowStride
+      val vPixStride = planes[2].pixelStride
+      val yLimit = yBuf.limit()
+      val uLimit = uBuf.limit()
+      val vLimit = vBuf.limit()
+
+      val invDstW = 1f / dstW.toFloat()
+      val invDstH = 1f / dstH.toFloat()
+
+      for (dy in 0 until dstH) {
+        val ny = (dy + 0.5f) * invDstH
+        val rowOut = dy * dstW
+        for (dx in 0 until dstW) {
+          val nx = (dx + 0.5f) * invDstW
+          val (sxNorm, syNorm) =
+            when (rotationDegrees) {
+              90 -> ny to (1f - nx)
+              180 -> (1f - nx) to (1f - ny)
+              270 -> (1f - ny) to nx
+              else -> nx to ny
+            }
+          val sx = cropLeft + (sxNorm * srcW).toInt().coerceIn(0, srcW - 1)
+          val sy = cropTop + (syNorm * srcH).toInt().coerceIn(0, srcH - 1)
+
+          val yIdx = (sy * yRowStride + sx * yPixStride).coerceIn(0, yLimit - 1)
+          val uvX = sx shr 1
+          val uvY = sy shr 1
+          val uIdx = (uvY * uRowStride + uvX * uPixStride).coerceIn(0, uLimit - 1)
+          val vIdx = (uvY * vRowStride + uvX * vPixStride).coerceIn(0, vLimit - 1)
+
+          val yVal = (yBuf.get(yIdx).toInt() and 0xFF) - 16
+          val uVal = (uBuf.get(uIdx).toInt() and 0xFF) - 128
+          val vVal = (vBuf.get(vIdx).toInt() and 0xFF) - 128
+
+          val yScaled = max(0, yVal) * 1192
+          var r = (yScaled + 1634 * vVal) shr 10
+          var g = (yScaled - 833 * vVal - 400 * uVal) shr 10
+          var b = (yScaled + 2066 * uVal) shr 10
+
+          if (r < 0) r = 0 else if (r > 255) r = 255
+          if (g < 0) g = 0 else if (g > 255) g = 255
+          if (b < 0) b = 0 else if (b > 255) b = 255
+
+          pixels[rowOut + dx] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+      }
+
+      bmp.setPixels(pixels, 0, dstW, 0, 0, dstW, dstH)
+      return true
+    }
+
+    override fun close() {
+      release()
+    }
+
+    fun release() {
+      isInitialized = false
+      try {
+        runCatching { codec?.stop() }
+      } finally {
+        try {
+          runCatching { codec?.release() }
+          codec = null
+        } finally {
+          try {
+            runCatching { extractor?.release() }
+            extractor = null
+          } finally {
+            runCatching { scratchBitmap?.recycle() }
+            scratchBitmap = null
+            scratchPixels = null
+            currentPtsUs = -1L
+          }
+        }
+      }
+    }
+  }
+
   /**
    * Scene-cut aware, motion-adaptive high-precision mask provider for Media3 Transformer export.
    *
-   * - Decodes scaled frames at 384px max dimension for sharp edge-guided matting.
+   * - Uses a sequential monotonic MediaExtractor + MediaCodec video decoder matching Media3
+   *   Transformer's chronological export clock (zero random keyframe seeks per frame).
    * - Detects hard scene cuts via 16x16 frame fingerprint and flushes temporal history immediately.
    * - Skips redundant ML Kit inference on near-static frames (SAD < 4.2) for fast exports.
    * - Ramps to full 30fps (33ms cadence) with zero temporal lag during fast hand/head motion.
    * - Reuses internal RGB/output scratch buffers to eliminate GC pauses during long exports.
    */
-  class ExportMaskProvider(context: Context, videoUri: Uri) {
-    private val retriever = MediaMetadataRetriever()
-    private var isOpen = false
+  class ExportMaskProvider(context: Context, videoUri: Uri) : AutoCloseable {
+    private val decodeLock = Any()
+    private val sequentialDecoder = SequentialVideoFrameDecoder(context, videoUri, MASK_MAX_DIM_EXPORT_HQ)
+    private var fallbackRetriever: MediaMetadataRetriever? = null
+    @Volatile private var isOpen = false
     private val exportCache = LruCache<Long, Bitmap>(20)
 
     private var lastFingerprint: IntArray? = null
@@ -631,119 +971,155 @@ object SubjectMaskProcessor {
     private var scratchOut: IntArray? = null
 
     init {
-      try {
-        retriever.setDataSource(context, videoUri)
+      if (sequentialDecoder.isReady) {
         isOpen = true
-      } catch (_: Exception) {
-        isOpen = false
+      } else {
+        // Fallback safety net only if a container cannot be opened by MediaCodec
+        try {
+          fallbackRetriever = MediaMetadataRetriever().apply { setDataSource(context, videoUri) }
+          isOpen = true
+        } catch (_: Exception) {
+          fallbackRetriever = null
+          isOpen = false
+        }
       }
     }
 
-    fun getMaskAtTimeUs(presentationTimeUs: Long): Bitmap? {
-      if (!isOpen) return null
-      val clampedUs = presentationTimeUs.coerceAtLeast(0L)
-      val bucket = clampedUs / 33_333L // Full 30fps bucket resolution
-      exportCache.get(bucket)?.let { return it }
+    fun getMaskAtTimeUs(presentationTimeUs: Long): Bitmap? =
+      synchronized(decodeLock) {
+        if (!isOpen) return null
+        val clampedUs = presentationTimeUs.coerceAtLeast(0L)
+        val bucket = clampedUs / 33_333L // Full 30fps bucket resolution
+        exportCache.get(bucket)?.let { return it }
 
-      val frameBmp = decodeScaledFrame(clampedUs) ?: return lastMaskBitmap
-      val fingerprint = computeFrameFingerprint16x16(frameBmp)
+        val (frameBmp, shouldRecycleFrame) = decodeScaledFrame(clampedUs)
+        if (frameBmp == null) return lastMaskBitmap
 
-      val deltaUs = if (lastSampledUs >= 0L) abs(clampedUs - lastSampledUs) else Long.MAX_VALUE
-      val motionSad =
-        if (lastFingerprint != null && deltaUs <= 200_000L) {
-          frameDifferenceSad(lastFingerprint!!, fingerprint)
-        } else {
-          255f
-        }
-      val isSceneCut = motionSad >= SCENE_CUT_SAD_THRESHOLD
+        try {
+          val fingerprint = computeFrameFingerprint16x16(frameBmp)
 
-      // Static frame fast-path: skip ML Kit completely when frame hasn't meaningfully moved (<100ms window)
-      if (!isSceneCut && motionSad < STILL_FRAME_SAD_THRESHOLD && deltaUs <= 100_000L && lastMaskBitmap != null && !lastMaskBitmap!!.isRecycled) {
-        frameBmp.recycle()
-        exportCache.put(bucket, lastMaskBitmap!!)
-        return lastMaskBitmap
-      }
+          val deltaUs = if (lastSampledUs >= 0L) abs(clampedUs - lastSampledUs) else Long.MAX_VALUE
+          val motionSad =
+            if (lastFingerprint != null && deltaUs <= 200_000L) {
+              frameDifferenceSad(lastFingerprint!!, fingerprint)
+            } else {
+              255f
+            }
+          val isSceneCut = motionSad >= SCENE_CUT_SAD_THRESHOLD
 
-      if (isSceneCut) {
-        lastProbs = null
-        lastMaskBitmap = null
-      }
+          // Static frame fast-path: skip ML Kit completely when frame hasn't meaningfully moved (<100ms window)
+          if (!isSceneCut && motionSad < STILL_FRAME_SAD_THRESHOLD && deltaUs <= 100_000L && lastMaskBitmap != null && !lastMaskBitmap!!.isRecycled) {
+            exportCache.put(bucket, lastMaskBitmap!!)
+            return lastMaskBitmap
+          }
 
-      val raw = runSegmenterRawBlocking(streamSegmenter, frameBmp)
-      if (raw == null) {
-        frameBmp.recycle()
-        return if (isSceneCut) null else lastMaskBitmap
-      }
+          if (isSceneCut) {
+            lastProbs = null
+            lastMaskBitmap = null
+          }
 
-      val neededPixels = frameBmp.width * frameBmp.height
-      if (scratchRgb == null || scratchRgb!!.size < neededPixels) {
-        scratchRgb = IntArray(neededPixels)
-        scratchOut = IntArray(neededPixels)
-      }
+          val raw = runSegmenterRawBlocking(streamSegmenter, frameBmp)
+          if (raw == null) {
+            return if (isSceneCut) null else lastMaskBitmap
+          }
 
-      val temporalWeight =
-        when {
-          isSceneCut || motionSad >= HIGH_MOTION_SAD_THRESHOLD -> 1.0f // Instant response on cuts & fast motion
-          else -> 0.80f // Subtle temporal lock prevents hair flicker on 30fps export
-        }
+          val neededPixels = frameBmp.width * frameBmp.height
+          if (scratchRgb == null || scratchRgb!!.size < neededPixels) {
+            scratchRgb = IntArray(neededPixels)
+            scratchOut = IntArray(neededPixels)
+          }
 
-      val refined =
-        refineAndBuildAlphaMask(
-          rawProbs = raw.probs,
-          maskW = raw.width,
-          maskH = raw.height,
-          rgbGuideBitmap = frameBmp,
-          prevProbs = if (!isSceneCut && lastW == frameBmp.width && lastH == frameBmp.height) lastProbs else null,
-          temporalWeight = temporalWeight,
-          scratchRgb = scratchRgb,
-          scratchOut = scratchOut,
-        )
-      frameBmp.recycle()
+          val temporalWeight =
+            when {
+              isSceneCut || motionSad >= HIGH_MOTION_SAD_THRESHOLD -> 1.0f // Instant response on cuts & fast motion
+              else -> 0.80f // Subtle temporal lock prevents hair flicker on 30fps export
+            }
 
-      lastFingerprint = fingerprint
-      lastSampledUs = clampedUs
+          val refined =
+            refineAndBuildAlphaMask(
+              rawProbs = raw.probs,
+              maskW = raw.width,
+              maskH = raw.height,
+              rgbGuideBitmap = frameBmp,
+              prevProbs = if (!isSceneCut && lastW == frameBmp.width && lastH == frameBmp.height) lastProbs else null,
+              temporalWeight = temporalWeight,
+              scratchRgb = scratchRgb,
+              scratchOut = scratchOut,
+            )
 
-      if (refined != null) {
-        lastProbs = refined.probs
-        lastW = refined.bitmap.width
-        lastH = refined.bitmap.height
-        lastMaskBitmap = refined.bitmap
-        exportCache.put(bucket, refined.bitmap)
-        return refined.bitmap
-      }
-      return null
-    }
+          lastFingerprint = fingerprint
+          lastSampledUs = clampedUs
 
-    private fun decodeScaledFrame(timeUs: Long): Bitmap? {
-      return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-          retriever.getScaledFrameAtTime(
-            timeUs,
-            MediaMetadataRetriever.OPTION_CLOSEST,
-            MASK_MAX_DIM_EXPORT_HQ,
-            MASK_MAX_DIM_EXPORT_HQ,
-          )
-        } else {
-          retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)?.let { raw ->
-            val scaled = downscaleForSegmentation(raw, MASK_MAX_DIM_EXPORT_HQ)
-            if (scaled !== raw) raw.recycle()
-            scaled
+          if (refined != null) {
+            lastProbs = refined.probs
+            lastW = refined.bitmap.width
+            lastH = refined.bitmap.height
+            lastMaskBitmap = refined.bitmap
+            exportCache.put(bucket, refined.bitmap)
+            return refined.bitmap
+          }
+          return null
+        } finally {
+          if (shouldRecycleFrame && !frameBmp.isRecycled) {
+            frameBmp.recycle()
           }
         }
-      } catch (_: Exception) {
-        null
       }
+
+    private fun decodeScaledFrame(timeUs: Long): Pair<Bitmap?, Boolean> {
+      if (sequentialDecoder.isReady) {
+        val decoded = sequentialDecoder.decodeFrameAtTimeUs(timeUs)
+        if (decoded != null) {
+          // Owned & reused by sequentialDecoder; caller must NOT recycle
+          return decoded to false
+        }
+      }
+      val retriever = fallbackRetriever ?: return null to false
+      val fallbackBmp =
+        try {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+              timeUs,
+              MediaMetadataRetriever.OPTION_CLOSEST,
+              MASK_MAX_DIM_EXPORT_HQ,
+              MASK_MAX_DIM_EXPORT_HQ,
+            )
+          } else {
+            retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)?.let { raw ->
+              val scaled = downscaleForSegmentation(raw, MASK_MAX_DIM_EXPORT_HQ)
+              if (scaled !== raw) raw.recycle()
+              scaled
+            }
+          }
+        } catch (_: Exception) {
+          null
+        }
+      return fallbackBmp to true
+    }
+
+    override fun close() {
+      release()
     }
 
     fun release() {
       isOpen = false
-      exportCache.evictAll()
-      lastProbs = null
-      lastFingerprint = null
-      lastMaskBitmap = null
-      scratchRgb = null
-      scratchOut = null
-      runCatching { retriever.release() }
+      synchronized(decodeLock) {
+        try {
+          exportCache.evictAll()
+          lastProbs = null
+          lastFingerprint = null
+          lastMaskBitmap = null
+          scratchRgb = null
+          scratchOut = null
+        } finally {
+          try {
+            sequentialDecoder.release()
+          } finally {
+            runCatching { fallbackRetriever?.release() }
+            fallbackRetriever = null
+          }
+        }
+      }
     }
   }
 }

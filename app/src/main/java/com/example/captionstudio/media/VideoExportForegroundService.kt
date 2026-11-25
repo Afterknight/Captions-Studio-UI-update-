@@ -16,6 +16,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.ExportPreferences
+import com.example.captionstudio.domain.model.FaceAnchorSample
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,6 +37,8 @@ object VideoExportCoordinator {
     val presetId: String,
     val exportPrefs: ExportPreferences,
     val outputTitle: String,
+    val faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
+    val audioEnergyEnvelope10ms: FloatArray? = null,
   )
 
   @Volatile var pendingJob: PendingExportJob? = null
@@ -57,9 +60,20 @@ object VideoExportCoordinator {
     presetId: String,
     exportPrefs: ExportPreferences,
     outputTitle: String,
+    faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
+    audioEnergyEnvelope10ms: FloatArray? = null,
   ) {
     val appCtx = context.applicationContext
-    val job = PendingExportJob(videoUri, compositions, presetId, exportPrefs, outputTitle)
+    val job =
+      PendingExportJob(
+        videoUri = videoUri,
+        compositions = compositions,
+        presetId = presetId,
+        exportPrefs = exportPrefs,
+        outputTitle = outputTitle,
+        faceAnchorSamples = faceAnchorSamples,
+        audioEnergyEnvelope10ms = audioEnergyEnvelope10ms,
+      )
     pendingJob = job
 
     val intent =
@@ -75,7 +89,15 @@ object VideoExportCoordinator {
     } catch (_: Throwable) {
       // Safe fallback (e.g., Robolectric or restricted background start): execute directly in-process
       pendingJob = null
-      engine(appCtx).startExport(videoUri, compositions, presetId, exportPrefs, outputTitle)
+      engine(appCtx).startExport(
+        videoUri = videoUri,
+        compositions = compositions,
+        presetId = presetId,
+        exportPrefs = exportPrefs,
+        outputTitle = outputTitle,
+        faceAnchorSamples = faceAnchorSamples,
+        audioEnergyEnvelope10ms = audioEnergyEnvelope10ms,
+      )
     }
   }
 
@@ -141,6 +163,8 @@ class VideoExportForegroundService : Service() {
           presetId = job.presetId,
           exportPrefs = job.exportPrefs,
           outputTitle = job.outputTitle,
+          faceAnchorSamples = job.faceAnchorSamples,
+          audioEnergyEnvelope10ms = job.audioEnergyEnvelope10ms,
         )
       }
     }

@@ -128,7 +128,7 @@ class CaptionStudioEngineTest {
   }
 
   @Test
-  fun `switching between all 36 normal and kinetic presets preserves transcript and timings`() {
+  fun `switching between all 40 normal and kinetic presets preserves transcript and timings`() {
     val base =
       LocalCompositionEngine.generateCompositions(
         transcript = "Why do many creators add. Especially text like this.",
@@ -138,8 +138,9 @@ class CaptionStudioEngineTest {
         analysisReport = VideoAnalysisReport(),
       )
     assertEquals(16, PresetCatalog.normalPresets.size)
-    assertEquals(20, PresetCatalog.kineticPresets.size)
-    assertEquals(36, PresetCatalog.presets.size)
+    assertEquals(24, PresetCatalog.kineticPresets.size)
+    assertEquals(40, PresetCatalog.presets.size)
+    assertEquals(4, PresetCatalog.signaturePresets.size)
     val legacyIds = listOf("editorial", "impact", "kinetic", "minimal", "magazine", "neon", "cinematic", "creator")
     legacyIds.forEach { legacyId ->
       assertTrue("Legacy preset $legacyId must exist", PresetCatalog.presets.any { it.id == legacyId })
@@ -876,6 +877,531 @@ class CaptionStudioEngineTest {
         com.example.captionstudio.domain.model.LayerMotionEffect.TYPEWRITER,
       ),
       com.example.captionstudio.ui.components.CuratedMotionEffects,
+    )
+  }
+
+  @Test
+  fun `new typography model fields default safely and remain JSON backward compatible`() {
+    val defaultEl =
+      com.example.captionstudio.domain.model.CaptionElement(
+        id = "e_default",
+        text = "Hello",
+        role = FontRole.SUPPORTING,
+        hierarchyLevel = HierarchyLevel.SUPPORTING,
+        fontFamilyId = "inter",
+      )
+    assertEquals(com.example.captionstudio.domain.model.LetterAnimationStyle.NONE, defaultEl.letterAnimation)
+    assertEquals(com.example.captionstudio.domain.model.TextSurfaceStyle.STANDARD, defaultEl.surfaceStyle)
+    assertEquals(0f, defaultEl.tiltDegrees, 0.0001f)
+
+    // Verify legacy serialized JSON lacking the new fields decodes with safe defaults
+    val legacyJson =
+      """{"id":"legacy_1","text":"Classic","role":"HEAVY","hierarchyLevel":"DOMINANT","fontFamilyId":"anton"}"""
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    val decoded = json.decodeFromString<CompositionElement>(legacyJson)
+    assertEquals(com.example.captionstudio.domain.model.LetterAnimationStyle.NONE, decoded.letterAnimation)
+    assertEquals(com.example.captionstudio.domain.model.TextSurfaceStyle.STANDARD, decoded.surfaceStyle)
+    assertEquals(0f, decoded.tiltDegrees, 0.0001f)
+  }
+
+  @Test
+  fun `validator boosts italic serif optical scale by 8 percent when paired inline with geometric sans`() {
+    val serifIds = listOf("playfair_display", "cormorant_garamond", "bodoni_moda", "libre_baskerville")
+    for (serifId in serifIds) {
+      val comp =
+        CaptionComposition(
+          id = "c_optical_$serifId",
+          startMs = 0L,
+          endMs = 2000L,
+          originalText = "Pure cinema",
+          elements =
+            listOf(
+              CompositionElement(
+                id = "e_sans",
+                text = "Pure",
+                role = FontRole.SUPPORTING,
+                hierarchyLevel = HierarchyLevel.SUPPORTING,
+                fontFamilyId = "inter",
+                isItalic = false,
+                fontSizeSp = 24f,
+                inlineRowGroup = 0,
+              ),
+              CompositionElement(
+                id = "e_serif",
+                text = "cinema",
+                role = FontRole.EXPRESSIVE,
+                hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+                fontFamilyId = serifId,
+                isItalic = true,
+                fontSizeSp = 24f,
+                inlineRowGroup = 0,
+                tiltDegrees = 30f, // should be clamped to 18f
+              ),
+            ),
+        )
+      val fixed = CompositionValidator.validateAndRepair(null, listOf(comp))
+      val sans = fixed.first().elements.first { it.id == "e_sans" }
+      val serif = fixed.first().elements.first { it.id == "e_serif" }
+
+      assertEquals(24f, sans.fontSizeSp, 0.01f)
+      assertEquals("Expected +8% optical boost for $serifId", 24f * 1.08f, serif.fontSizeSp, 0.05f)
+      assertEquals(18f, serif.tiltDegrees, 0.001f)
+
+      // Calling validateAndRepair a second time must be idempotent (no double-boost)
+      val fixedTwice = CompositionValidator.validateAndRepair(null, fixed)
+      val serifTwice = fixedTwice.first().elements.first { it.id == "e_serif" }
+      assertEquals(serif.fontSizeSp, serifTwice.fontSizeSp, 0.01f)
+    }
+
+    // Non-italic serif in same inline row should NOT receive the italic optical boost
+    val uprightComp =
+      CaptionComposition(
+        id = "c_upright",
+        startMs = 0L,
+        endMs = 2000L,
+        originalText = "Pure cinema",
+        elements =
+          listOf(
+            CompositionElement(
+              id = "e_sans",
+              text = "Pure",
+              role = FontRole.SUPPORTING,
+              hierarchyLevel = HierarchyLevel.SUPPORTING,
+              fontFamilyId = "inter",
+              fontSizeSp = 24f,
+              inlineRowGroup = 0,
+            ),
+            CompositionElement(
+              id = "e_serif_upright",
+              text = "cinema",
+              role = FontRole.EXPRESSIVE,
+              hierarchyLevel = HierarchyLevel.EXPRESSIVE,
+              fontFamilyId = "playfair_display",
+              isItalic = false,
+              fontSizeSp = 24f,
+              inlineRowGroup = 0,
+            ),
+          ),
+      )
+    val fixedUpright = CompositionValidator.validateAndRepair(null, listOf(uprightComp))
+    assertEquals(24f, fixedUpright.first().elements.first { it.id == "e_serif_upright" }.fontSizeSp, 0.01f)
+  }
+
+  @Test
+  fun `zero-widow 2-line balancer avoids orphan words and keeps line widths within 20 percent variance`() {
+    val measureCharWidth: (String) -> Float = { s -> s.length * 10f }
+
+    // Greedy wrapping at maxWidth=220 would produce "Why creators use bold" (210) + "captions" (80, orphan!)
+    // Zero-widow 2-line balancer must split into "Why creators use" (160) + "bold captions" (130) -> 18.75% variance
+    val balanced =
+      CompositionValidator.balanceTwoLineText(
+        text = "Why creators use bold captions",
+        maxLineWidthPx = 220f,
+        measureWidth = measureCharWidth,
+      )
+    assertEquals(2, balanced.size)
+    val line2Words = balanced[1].split(" ").filter { it.isNotEmpty() }
+    assertTrue("Line 2 must not be a single orphan word, got: ${balanced[1]}", line2Words.size >= 2)
+    val w1 = measureCharWidth(balanced[0])
+    val w2 = measureCharWidth(balanced[1])
+    val variance = kotlin.math.abs(w1 - w2) / kotlin.math.max(w1, w2)
+    assertTrue("Expected line width variance <= 0.20, was $variance ($balanced)", variance <= 0.20f)
+
+    // Even when no <=20% split exists mathematically, balancer still eliminates the line-2 widow
+    val noWidowFallback =
+      CompositionValidator.balanceTwoLineText(
+        text = "Make every single frame pop",
+        maxLineWidthPx = 240f,
+        measureWidth = measureCharWidth,
+      )
+    assertEquals(2, noWidowFallback.size)
+    assertTrue(noWidowFallback[1].split(" ").size >= 2)
+
+    // Short text that fits cleanly on 1 line stays on 1 line
+    val single =
+      CompositionValidator.balanceTwoLineText(
+        text = "Stay crisp",
+        maxLineWidthPx = 240f,
+        measureWidth = measureCharWidth,
+      )
+    assertEquals(listOf("Stay crisp"), single)
+
+    // Explicit widow break gets rebalanced cleanly
+    val rebalancedExplicit =
+      CompositionValidator.balanceTwoLineText(
+        text = "Stories that hold viewer\nattention",
+        maxLineWidthPx = 260f,
+        measureWidth = measureCharWidth,
+      )
+    assertEquals(2, rebalancedExplicit.size)
+    assertTrue(rebalancedExplicit[1].split(" ").size >= 2)
+  }
+
+  @Test
+  fun `per-character animation math is deterministic and honors exact timing and bounds`() {
+    // 1. STAGGER_POP: charIndex * 32L ms stagger
+    val char0At10 = com.example.captionstudio.engine.KineticCompositionRenderer.computeStaggerPopState(10L, 0)
+    val char2At50 = com.example.captionstudio.engine.KineticCompositionRenderer.computeStaggerPopState(50L, 2)
+    val char2At90 = com.example.captionstudio.engine.KineticCompositionRenderer.computeStaggerPopState(90L, 2)
+    assertTrue("Char 0 should already be visible at 10ms", char0At10.alpha > 0f)
+    assertEquals("Char 2 starts at 64ms so must be hidden at 50ms", 0f, char2At50.alpha, 0.0001f)
+    assertTrue("Char 2 should be visible at 90ms", char2At90.alpha > 0f && char2At90.scale > 0.52f)
+
+    // 2. CHAR_REVEAL: progressive reveal across [1000..1500]ms for 5-char word
+    assertEquals(0f, com.example.captionstudio.engine.KineticCompositionRenderer.computeCharRevealAlpha(999L, 1000L, 1500L, 0, 5), 0.0001f)
+    assertTrue(com.example.captionstudio.engine.KineticCompositionRenderer.computeCharRevealAlpha(1150L, 1000L, 1500L, 0, 5) >= 0.99f)
+    assertEquals(0f, com.example.captionstudio.engine.KineticCompositionRenderer.computeCharRevealAlpha(1150L, 1000L, 1500L, 4, 5), 0.0001f)
+    assertEquals(1f, com.example.captionstudio.engine.KineticCompositionRenderer.computeCharRevealAlpha(1500L, 1000L, 1500L, 4, 5), 0.0001f)
+
+    // 3. HAND_BOIL_15FPS: 68ms quantized buckets, deterministic, bounded ranges
+    val b0Start = com.example.captionstudio.engine.KineticCompositionRenderer.computeHandBoilTransform(0L, 3, 42)
+    val b0End = com.example.captionstudio.engine.KineticCompositionRenderer.computeHandBoilTransform(67L, 3, 42)
+    val b1Start = com.example.captionstudio.engine.KineticCompositionRenderer.computeHandBoilTransform(68L, 3, 42)
+    assertEquals("Frames inside the same 68ms bucket must match exactly", b0Start, b0End)
+    assertTrue("Next 68ms bucket should step to a fresh micro-jitter pose", b0Start != b1Start)
+
+    for (t in 0L..1200L step 34L) {
+      for (c in 0..8) {
+        val boil = com.example.captionstudio.engine.KineticCompositionRenderer.computeHandBoilTransform(t, c, 99)
+        assertTrue("Rotation out of ±1.8deg: ${boil.rotationDeg}", boil.rotationDeg in -1.8f..1.8f)
+        assertTrue("Scale out of 1±0.03: ${boil.scale}", boil.scale in 0.97f..1.03f)
+        assertTrue("OffsetX out of ±1.5dp: ${boil.offsetXDp}", boil.offsetXDp in -1.5f..1.5f)
+        assertTrue("OffsetY out of ±1.5dp: ${boil.offsetYDp}", boil.offsetYDp in -1.5f..1.5f)
+      }
+    }
+
+    // 4. HALATION_BLOOM: peaks during first 140ms and settles to 0f afterward
+    val boostStart = com.example.captionstudio.engine.KineticCompositionRenderer.computeHalationBloomBoost(5f)
+    val boostMid = com.example.captionstudio.engine.KineticCompositionRenderer.computeHalationBloomBoost(70f)
+    val boostSettled = com.example.captionstudio.engine.KineticCompositionRenderer.computeHalationBloomBoost(145f)
+    assertTrue("Halation should peak brightly right after entry", boostStart > boostMid && boostMid > 0.1f)
+    assertEquals("Halation should settle cleanly after 140ms", 0f, boostSettled, 0.0001f)
+
+    // 5. Directional motion-blur ghost constants match specification
+    assertEquals(70L, com.example.captionstudio.engine.KineticCompositionRenderer.MOTION_BLUR_WINDOW_MS)
+    assertEquals(
+      listOf(0.25f, 0.12f, 0.05f),
+      com.example.captionstudio.engine.KineticCompositionRenderer.MOTION_BLUR_GHOST_ALPHAS.toList(),
+    )
+  }
+
+  @Test
+  fun `designer frame, spatial layout, and vector flourish models default safely and remain JSON backward compatible`() {
+    val block =
+      com.example.captionstudio.domain.model.CaptionBlock(
+        id = "b_default",
+        startMs = 0L,
+        endMs = 1500L,
+        originalText = "Stay bold",
+        elements =
+          listOf(
+            com.example.captionstudio.domain.model.CaptionElement(
+              id = "e_default",
+              text = "Stay bold",
+              role = FontRole.SUPPORTING,
+              hierarchyLevel = HierarchyLevel.SUPPORTING,
+              fontFamilyId = "inter",
+            )
+          ),
+      )
+    assertEquals(com.example.captionstudio.domain.model.SpatialLayoutMode.STANDARD, block.spatialMode)
+    assertEquals(com.example.captionstudio.domain.model.DesignerFrameStyle.NONE, block.elements.first().designerFrame)
+    assertEquals(com.example.captionstudio.domain.model.VectorFlourish.NONE, block.elements.first().flourish)
+    assertEquals(0, block.elements.first().polarityVariantIndex)
+
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    val legacyCompJson =
+      """{"id":"c_old","startMs":0,"endMs":1200,"originalText":"Hello","elements":[{"id":"e_old","text":"Hello","role":"SUPPORTING","hierarchyLevel":"SUPPORTING","fontFamilyId":"inter"}]}"""
+    val decoded = json.decodeFromString<CaptionComposition>(legacyCompJson)
+    assertEquals(com.example.captionstudio.domain.model.SpatialLayoutMode.STANDARD, decoded.spatialMode)
+    assertEquals(com.example.captionstudio.domain.model.DesignerFrameStyle.NONE, decoded.elements.first().designerFrame)
+    assertEquals(com.example.captionstudio.domain.model.VectorFlourish.NONE, decoded.elements.first().flourish)
+  }
+
+  @Test
+  fun `polarity card palette, left-right split framing, and flourish progress math match spec`() {
+    // 1. Polarity card alternates cream (#EFECE4 / #111318) and midnight navy (#0E1A2B / #EFECE4 / #C8A252)
+    val cream = com.example.captionstudio.engine.KineticCompositionRenderer.computePolarityCardPalette(0)
+    val navy = com.example.captionstudio.engine.KineticCompositionRenderer.computePolarityCardPalette(1)
+    assertEquals("#EFECE4", cream.fillHex)
+    assertEquals("#111318", cream.inkHex)
+    assertEquals(false, cream.isMidnightNavy)
+    assertEquals("#0E1A2B", navy.fillHex)
+    assertEquals("#EFECE4", navy.inkHex)
+    assertEquals("#C8A252", navy.accentHex)
+    assertEquals(true, navy.isMidnightNavy)
+
+    // 2. Left-right split flanks the center subject corridor cleanly
+    val canvasW = 1080f
+    val (leftX, rightX) =
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeLeftRightSplitX(
+        canvasWidth = canvasW,
+        leftWidthPx = 220f,
+        rightWidthPx = 240f,
+      )
+    assertTrue("Left center ($leftX) must stay left of subject corridor", leftX + 110f <= canvasW * 0.42f)
+    assertTrue("Right center ($rightX) must stay right of subject corridor", rightX - 120f >= canvasW * 0.58f)
+    assertTrue("Left block stays inside safe left margin", leftX - 110f >= canvasW * 0.05f)
+    assertTrue("Right block stays inside safe right margin", rightX + 120f <= canvasW * 0.95f)
+
+    // 3. Flourish PathMeasure progress animates 0f -> 1f over 180ms
+    assertEquals(0f, com.example.captionstudio.engine.KineticCompositionRenderer.computeFlourishProgress(0f), 0.0001f)
+    val midProgress = com.example.captionstudio.engine.KineticCompositionRenderer.computeFlourishProgress(90f)
+    assertTrue("Mid flourish progress at 90ms should be smoothly between 0.5 and 0.95, was $midProgress", midProgress in 0.5f..0.95f)
+    assertEquals(1f, com.example.captionstudio.engine.KineticCompositionRenderer.computeFlourishProgress(180f), 0.0001f)
+    assertEquals(1f, com.example.captionstudio.engine.KineticCompositionRenderer.computeFlourishProgress(400f), 0.0001f)
+  }
+
+  @Test
+  fun `4 flagship signature presets generate full choreography and reset cleanly when switching away`() {
+    val transcript = "Quiet craft beats noise. Never stop creating magic."
+    val report = VideoAnalysisReport(subjectCoverageFraction = 0.28f)
+
+    // 1. BEAT POLARITY
+    val polarityPreset = PresetCatalog.findById(PresetCatalog.SIGNATURE_BEAT_POLARITY_ID)
+    assertEquals("BEAT POLARITY", polarityPreset.name)
+    val polarityComps =
+      LocalCompositionEngine.generateCompositions(transcript, emptyList(), 5000L, polarityPreset, report)
+    assertTrue(polarityComps.size >= 2)
+    polarityComps.forEachIndexed { idx, comp ->
+      val el = comp.elements.first()
+      assertEquals("space_grotesk", el.fontFamilyId)
+      assertEquals(-0.03f, el.letterSpacingEm, 0.0001f)
+      assertEquals(false, el.uppercase)
+      assertEquals(el.text.lowercase(), el.text)
+      assertEquals(com.example.captionstudio.domain.model.LetterAnimationStyle.CHAR_REVEAL, el.letterAnimation)
+      assertEquals(com.example.captionstudio.domain.model.DesignerFrameStyle.POLARITY_CARD, el.designerFrame)
+      assertEquals(idx, el.polarityVariantIndex)
+    }
+
+    // 2. EDITORIAL HALO
+    val haloPreset = PresetCatalog.findById(PresetCatalog.SIGNATURE_EDITORIAL_HALO_ID)
+    assertEquals("EDITORIAL HALO", haloPreset.name)
+    val haloComps =
+      LocalCompositionEngine.generateCompositions(transcript, emptyList(), 5000L, haloPreset, report)
+    assertTrue(
+      "EDITORIAL HALO must use LEFT_RIGHT_SPLIT on 2-4 word emphasis blocks",
+      haloComps.any { it.spatialMode == com.example.captionstudio.domain.model.SpatialLayoutMode.LEFT_RIGHT_SPLIT },
+    )
+    val haloEls = haloComps.flatMap { it.elements }
+    assertTrue(haloEls.all { it.surfaceStyle == com.example.captionstudio.domain.model.TextSurfaceStyle.HALATION_BLOOM })
+    val interEl = haloEls.first { it.fontFamilyId == "inter" }
+    val playfairEl = haloEls.first { it.fontFamilyId == "playfair_display" && it.isItalic }
+    assertEquals(interEl.fontSizeSp * 1.08f, playfairEl.fontSizeSp, 0.05f)
+
+    // 3. STORY ARC
+    val storyArcPreset = PresetCatalog.findById(PresetCatalog.SIGNATURE_STORY_ARC_ID)
+    assertEquals("STORY ARC", storyArcPreset.name)
+    val storyComps =
+      LocalCompositionEngine.generateCompositions(transcript, emptyList(), 5000L, storyArcPreset, report)
+    assertTrue(storyComps.all { it.spatialMode == com.example.captionstudio.domain.model.SpatialLayoutMode.CURVED_ARC_PATH })
+    val storyEls = storyComps.flatMap { it.elements }
+    assertTrue("STORY ARC must include warm-gold italic whispers", storyEls.any { it.isItalic && it.colorHex == "#FFD166" })
+    assertTrue("STORY ARC must include INFLATED_3D peak bursts", storyEls.any { it.surfaceStyle == com.example.captionstudio.domain.model.TextSurfaceStyle.INFLATED_3D })
+
+    // 4. HANDCRAFTED FRAME
+    val handPreset = PresetCatalog.findById(PresetCatalog.SIGNATURE_HANDCRAFTED_FRAME_ID)
+    assertEquals("HANDCRAFTED FRAME", handPreset.name)
+    val handComps =
+      LocalCompositionEngine.generateCompositions(transcript, emptyList(), 5000L, handPreset, report)
+    val handEls = handComps.flatMap { it.elements }
+    assertTrue(
+      "HANDCRAFTED FRAME must include CONDENSED_EDITORIAL white italic serif baseline",
+      handEls.any {
+        it.surfaceStyle == com.example.captionstudio.domain.model.TextSurfaceStyle.CONDENSED_EDITORIAL &&
+          it.isItalic &&
+          it.colorHex == StudioPalette.WHITE
+      },
+    )
+    assertTrue(
+      "HANDCRAFTED FRAME must include HAND_BOIL_15FPS marker words",
+      handEls.any { it.letterAnimation == com.example.captionstudio.domain.model.LetterAnimationStyle.HAND_BOIL_15FPS },
+    )
+    assertTrue(
+      "HANDCRAFTED FRAME must include DASHED_SELECTION_BOX and PAPER_CUTOUT_PILL frames",
+      handEls.any { it.designerFrame == com.example.captionstudio.domain.model.DesignerFrameStyle.DASHED_SELECTION_BOX } &&
+        handEls.any { it.designerFrame == com.example.captionstudio.domain.model.DesignerFrameStyle.PAPER_CUTOUT_PILL },
+    )
+    assertTrue(
+      "HANDCRAFTED FRAME must include SWOOSH_UNDERLINE and HAND_CIRCLE flourishes",
+      handEls.any { it.flourish == com.example.captionstudio.domain.model.VectorFlourish.SWOOSH_UNDERLINE } &&
+        handEls.any { it.flourish == com.example.captionstudio.domain.model.VectorFlourish.HAND_CIRCLE },
+    )
+
+    // 5. Switching from HANDCRAFTED FRAME -> EDITORIAL HALO -> classic EDITORIAL resets cleanly
+    val switchedToHalo = PresetCatalog.applyPresetToCompositions(haloPreset, handComps, report)
+    assertTrue(switchedToHalo.any { it.spatialMode == com.example.captionstudio.domain.model.SpatialLayoutMode.LEFT_RIGHT_SPLIT })
+    val switchedBackToClassic =
+      PresetCatalog.applyPresetToCompositions(PresetCatalog.findById("editorial"), switchedToHalo, report)
+    assertTrue(switchedBackToClassic.all { it.spatialMode == com.example.captionstudio.domain.model.SpatialLayoutMode.STANDARD })
+    assertTrue(
+      switchedBackToClassic.flatMap { it.elements }.all {
+        it.designerFrame == com.example.captionstudio.domain.model.DesignerFrameStyle.NONE &&
+          it.flourish == com.example.captionstudio.domain.model.VectorFlourish.NONE &&
+          it.letterAnimation == com.example.captionstudio.domain.model.LetterAnimationStyle.NONE &&
+          it.surfaceStyle == com.example.captionstudio.domain.model.TextSurfaceStyle.STANDARD
+      },
+    )
+  }
+
+  @Test
+  fun `monotonic sequential decoder chooses reuse step-forward or seek accurately`() {
+    assertEquals(
+      com.example.captionstudio.media.SubjectMaskProcessor.MonotonicDecodeAction.STEP_FORWARD,
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMonotonicDecodeAction(
+        currentFramePtsUs = -1L,
+        targetTimeUs = 0L,
+      ),
+    )
+    assertEquals(
+      com.example.captionstudio.media.SubjectMaskProcessor.MonotonicDecodeAction.REUSE_CURRENT,
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMonotonicDecodeAction(
+        currentFramePtsUs = 100_000L,
+        targetTimeUs = 112_000L,
+      ),
+    )
+    assertEquals(
+      com.example.captionstudio.media.SubjectMaskProcessor.MonotonicDecodeAction.STEP_FORWARD,
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMonotonicDecodeAction(
+        currentFramePtsUs = 100_000L,
+        targetTimeUs = 133_333L,
+      ),
+    )
+    assertEquals(
+      com.example.captionstudio.media.SubjectMaskProcessor.MonotonicDecodeAction.SEEK_AND_STEP,
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMonotonicDecodeAction(
+        currentFramePtsUs = 100_000L,
+        targetTimeUs = 3_500_000L,
+      ),
+    )
+    assertEquals(
+      com.example.captionstudio.media.SubjectMaskProcessor.MonotonicDecodeAction.SEEK_AND_STEP,
+      com.example.captionstudio.media.SubjectMaskProcessor.computeMonotonicDecodeAction(
+        currentFramePtsUs = 500_000L,
+        targetTimeUs = 120_000L,
+      ),
+    )
+  }
+
+  @Test
+  fun `face anchor samples serialize with safe defaults and interpolate damped head parallax`() {
+    val legacyJson = """{"averageLuma":0.42,"dominantSubjectX":0.5,"recommendedAnchorY":0.76}"""
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    val decoded: com.example.captionstudio.domain.model.VideoAnalysisResult =
+      json.decodeFromString(legacyJson)
+    assertTrue("Legacy reports default to empty faceAnchorSamples", decoded.faceAnchorSamples.isEmpty())
+
+    val samples =
+      listOf(
+        com.example.captionstudio.domain.model.FaceAnchorSample(
+          timestampMs = 0L,
+          centerX = 0.50f,
+          centerY = 0.38f,
+          headEulerAngleZ = 0f,
+        ),
+        com.example.captionstudio.domain.model.FaceAnchorSample(
+          timestampMs = 1000L,
+          centerX = 0.70f,
+          centerY = 0.48f,
+          headEulerAngleZ = 12f,
+        ),
+      )
+
+    val mid = com.example.captionstudio.engine.KineticCompositionRenderer.interpolateFaceAnchor(samples, 500L)
+    assertTrue(mid != null)
+    assertEquals(0.60f, mid!!.centerX, 0.001f)
+    assertEquals(0.43f, mid.centerY, 0.001f)
+    assertEquals(6.0f, mid.headEulerAngleZ, 0.001f)
+
+    // Verify 22% offset damping and 25% head roll damping
+    val parallaxMid =
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeHeadParallaxTransform(samples, 500L)
+    assertEquals(0.10f * 0.22f, parallaxMid.offsetXFraction, 0.0005f)
+    assertEquals(0.05f * 0.22f, parallaxMid.offsetYFraction, 0.0005f)
+    assertEquals(6.0f * 0.25f, parallaxMid.tiltDeg, 0.001f)
+
+    // Extreme head motion must clamp cleanly to safe bounds
+    val extremeSamples =
+      listOf(
+        com.example.captionstudio.domain.model.FaceAnchorSample(
+          timestampMs = 0L,
+          centerX = 0.98f,
+          centerY = 0.92f,
+          headEulerAngleZ = 45f,
+        )
+      )
+    val clamped =
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeHeadParallaxTransform(extremeSamples, 0L)
+    assertEquals(
+      com.example.captionstudio.engine.KineticCompositionRenderer.PARALLAX_MAX_OFFSET_X,
+      clamped.offsetXFraction,
+      0.0001f,
+    )
+    assertEquals(
+      com.example.captionstudio.engine.KineticCompositionRenderer.PARALLAX_MAX_OFFSET_Y,
+      clamped.offsetYFraction,
+      0.0001f,
+    )
+    assertEquals(
+      com.example.captionstudio.engine.KineticCompositionRenderer.PARALLAX_MAX_TILT_DEG,
+      clamped.tiltDeg,
+      0.0001f,
+    )
+  }
+
+  @Test
+  fun `audio 10ms RMS lookup normalizes cleanly and drives voice-breathing and halation pulse`() {
+    val rawEnvelope = FloatArray(100) { idx ->
+      when {
+        idx < 25 -> 0.02f // quiet ambient room noise floor
+        idx in 40..60 -> 0.80f // strong vocal peak
+        else -> 0.30f
+      }
+    }
+    val normalized =
+      com.example.captionstudio.media.AudioExtractionService.normalizeEnergyEnvelope10ms(rawEnvelope)
+    assertEquals(rawEnvelope.size, normalized.size)
+    assertTrue("Silence floor should map near 0", normalized[10] <= 0.02f)
+    assertTrue("Peak speech should map near 1", normalized[50] >= 0.95f)
+
+    // O(1) lookup with linear sub-10ms interpolation + cached key lookup
+    val key = "test://voice-breathing-video"
+    com.example.captionstudio.media.AudioExtractionService.cacheNormalizedEnvelope(key, normalized)
+    val cachedQuiet = com.example.captionstudio.media.AudioExtractionService.getNormalizedEnergyAt(key, 100L)
+    val cachedLoud = com.example.captionstudio.media.AudioExtractionService.getNormalizedEnergyAt(key, 500L)
+    val latestLoud = com.example.captionstudio.media.AudioExtractionService.getNormalizedEnergyAt(500L)
+    assertTrue("Quiet frame should be near 0, was $cachedQuiet", cachedQuiet <= 0.05f)
+    assertTrue("Loud frame should be near 1, was $cachedLoud", cachedLoud >= 0.95f)
+    assertEquals(cachedLoud, latestLoud, 0.0001f)
+
+    // Sub-10ms midpoint interpolation check
+    val ramp = floatArrayOf(0.0f, 1.0f)
+    assertEquals(
+      0.5f,
+      com.example.captionstudio.media.AudioExtractionService.getNormalizedEnergyAt(ramp, 5L),
+      0.001f,
+    )
+
+    // Voice-breathing scale (+0%..+5.5%) & Halation glow radius multiplier (1.0x..1.55x)
+    assertEquals(
+      1.0f,
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeVoiceBreathingScale(0f),
+      0.0001f,
+    )
+    assertEquals(
+      1.055f,
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeVoiceBreathingScale(1f),
+      0.0001f,
+    )
+    assertEquals(
+      1.0f,
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeHalationVoiceRadiusMultiplier(0f),
+      0.0001f,
+    )
+    assertEquals(
+      1.55f,
+      com.example.captionstudio.engine.KineticCompositionRenderer.computeHalationVoiceRadiusMultiplier(1f),
+      0.0001f,
     )
   }
 }

@@ -266,6 +266,62 @@ enum class KaraokeHighlightMode(
   UNDERLINE_SWEEP("Underline", "Glowing accent bar sweeps under each word"),
 }
 
+/**
+ * Per-character kinetic animation modes driven deterministically by playback timestamp.
+ */
+@Serializable
+enum class LetterAnimationStyle(val label: String) {
+  NONE("None"),
+  STAGGER_POP("Stagger Pop"),
+  CHAR_REVEAL("Char Reveal"),
+  HAND_BOIL_15FPS("Hand Boil 15fps"),
+}
+
+/**
+ * Editorial lighting, 3D depth, condensed scaling, and frosted backdrop surface shaders.
+ */
+@Serializable
+enum class TextSurfaceStyle(val label: String) {
+  STANDARD("Standard"),
+  HALATION_BLOOM("Halation Bloom"),
+  INFLATED_3D("Inflated 3D"),
+  CONDENSED_EDITORIAL("Condensed Editorial"),
+  FROSTED_GLASS("Frosted Glass"),
+}
+
+/**
+ * Editorial backdrop containers rendered directly on the unified Preview & Media3 export canvas.
+ */
+@Serializable
+enum class DesignerFrameStyle(val label: String) {
+  NONE("None"),
+  DASHED_SELECTION_BOX("Selection Box"),
+  PAPER_CUTOUT_PILL("Paper Cutout"),
+  POLARITY_CARD("Polarity Card"),
+}
+
+/**
+ * Subject-aware spatial layout modes for arranging words around or above the speaker.
+ */
+@Serializable
+enum class SpatialLayoutMode(val label: String) {
+  STANDARD("Standard"),
+  LEFT_RIGHT_SPLIT("Left-Right Split"),
+  CURVED_ARC_PATH("Curved Arc"),
+}
+
+/**
+ * Procedural ink flourishes animated from 0% to 100% via PathMeasure over the first 180ms.
+ */
+@Serializable
+enum class VectorFlourish(val label: String) {
+  NONE("None"),
+  HAND_CIRCLE("Hand Circle"),
+  SWOOSH_UNDERLINE("Swoosh Underline"),
+  SPARKLE_BURST("Sparkle Burst"),
+  POINTER_ARROW("Pointer Arrow"),
+}
+
 @Serializable
 enum class PresetCategory(val label: String) {
   NORMAL("Normal"),
@@ -361,7 +417,15 @@ data class CompositionElement(
   val karaokeMode: KaraokeHighlightMode = KaraokeHighlightMode.OFF,
   val karaokeHighlightColorHex: String = StudioPalette.YELLOW,
   val karaokePillColorHex: String? = null,
+  val letterAnimation: LetterAnimationStyle = LetterAnimationStyle.NONE,
+  val surfaceStyle: TextSurfaceStyle = TextSurfaceStyle.STANDARD,
+  val tiltDegrees: Float = 0f,
+  val designerFrame: DesignerFrameStyle = DesignerFrameStyle.NONE,
+  val flourish: VectorFlourish = VectorFlourish.NONE,
+  val polarityVariantIndex: Int = 0,
 )
+
+typealias CaptionElement = CompositionElement
 
 /**
  * Surgical patch model for updating any combination of kinetic typography layer attributes
@@ -404,6 +468,12 @@ data class ElementStylePatch(
   val karaokeHighlightColorHex: String? = null,
   val karaokePillColorHex: String? = null,
   val clearKaraokePill: Boolean = false,
+  val letterAnimation: LetterAnimationStyle? = null,
+  val surfaceStyle: TextSurfaceStyle? = null,
+  val tiltDegrees: Float? = null,
+  val designerFrame: DesignerFrameStyle? = null,
+  val flourish: VectorFlourish? = null,
+  val spatialMode: SpatialLayoutMode? = null,
 )
 
 @Immutable
@@ -426,6 +496,7 @@ data class CaptionComposition(
   val depthLayer: DepthLayer = DepthLayer.IN_FRONT,
   val styleVariant: CompositionStyleVariant = CompositionStyleVariant.HERO_STACK,
   val backgroundMaskEnabled: Boolean = true,
+  val spatialMode: SpatialLayoutMode = SpatialLayoutMode.STANDARD,
 ) {
   fun hasBehindSubjectElements(): Boolean {
     return backgroundMaskEnabled &&
@@ -433,6 +504,8 @@ data class CaptionComposition(
         elements.any { it.depthLayer == DepthLayer.BEHIND_SUBJECT })
   }
 }
+
+typealias CaptionBlock = CaptionComposition
 
 @Immutable
 @Serializable
@@ -486,6 +559,15 @@ data class ShotVisualAnalysis(
 
 @Immutable
 @Serializable
+data class FaceAnchorSample(
+  val timestampMs: Long = 0L,
+  val centerX: Float = 0.5f,
+  val centerY: Float = 0.38f,
+  val headEulerAngleZ: Float = 0f,
+)
+
+@Immutable
+@Serializable
 data class VideoAnalysisReport(
   val frameCountSampled: Int = 0,
   val sceneChangeTimestampsMs: List<Long> = emptyList(),
@@ -504,7 +586,10 @@ data class VideoAnalysisReport(
   val subjectCoverageFraction: Float = 0f,
   val isSplitScreenDetected: Boolean = false,
   val shotAnalyses: List<ShotVisualAnalysis> = emptyList(),
+  val faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
 )
+
+typealias VideoAnalysisResult = VideoAnalysisReport
 
 @Immutable
 @Serializable
@@ -569,6 +654,11 @@ data class PresetDefinition(
   val defaultKaraokeMode: KaraokeHighlightMode = KaraokeHighlightMode.OFF,
   val karaokeHighlightColorHex: String = StudioPalette.YELLOW,
   val karaokePillColorHex: String? = null,
+  val defaultLetterAnimation: LetterAnimationStyle = LetterAnimationStyle.NONE,
+  val defaultSurfaceStyle: TextSurfaceStyle = TextSurfaceStyle.STANDARD,
+  val defaultDesignerFrame: DesignerFrameStyle = DesignerFrameStyle.NONE,
+  val defaultSpatialMode: SpatialLayoutMode = SpatialLayoutMode.STANDARD,
+  val defaultFlourish: VectorFlourish = VectorFlourish.NONE,
 )
 
 @Immutable

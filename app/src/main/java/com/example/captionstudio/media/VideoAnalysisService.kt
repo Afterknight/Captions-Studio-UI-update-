@@ -8,18 +8,54 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.util.Base64
+import com.example.captionstudio.domain.model.FaceAnchorSample
 import com.example.captionstudio.domain.model.NormalizedRect
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 import com.example.captionstudio.domain.model.VideoMetadata
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetector as MlKitFaceDetector
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 object VideoAnalysisService {
+
+  private val mlKitFaceDetector: MlKitFaceDetector by lazy {
+    val options =
+      FaceDetectorOptions.Builder()
+        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+        .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
+        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+        .setMinFaceSize(0.12f)
+        .build()
+    FaceDetection.getClient(options)
+  }
+
+  private suspend fun detectMlKitFaces(bitmap: Bitmap): List<Face> =
+    suspendCancellableCoroutine { cont ->
+      try {
+        val image = InputImage.fromBitmap(bitmap, 0)
+        mlKitFaceDetector.process(image)
+          .addOnSuccessListener { faces ->
+            if (cont.isActive) cont.resume(faces)
+          }
+          .addOnFailureListener {
+            if (cont.isActive) cont.resume(emptyList())
+          }
+      } catch (_: Throwable) {
+        if (cont.isActive) cont.resume(emptyList())
+      }
+    }
 
   suspend fun extractMetadata(context: Context, videoUri: Uri): VideoMetadata =
     withContext(Dispatchers.IO) {
@@ -117,6 +153,7 @@ object VideoAnalysisService {
 
       val retriever = MediaMetadataRetriever()
       val faceRectsAll = mutableListOf<NormalizedRect>()
+      val faceAnchorSamples = mutableListOf<FaceAnchorSample>()
       val sceneChanges = mutableListOf<Long>()
       val frameSamples = mutableListOf<FrameSampleVisual>()
       var splitSeamHits = 0
@@ -124,18 +161,23 @@ object VideoAnalysisService {
       // Build deduplicated sample timestamps (uniformly across timeline + optional caption midpoints)
       val sampleTimesMs =
         buildList {
-          val uniformCount = if (metadata.durationMs > 20_000L) 12 else 9
-          val stepMs = (metadata.durationMs / (uniformCount + 1)).coerceAtLeast(250L)
+          val uniformCount =
+            when {
+              metadata.durationMs > 25_000L -> 18
+              metadata.durationMs > 10_000L -> 14
+              else -> 12
+            }
+          val stepMs = (metadata.durationMs / (uniformCount + 1)).coerceAtLeast(220L)
           for (i in 1..uniformCount) {
-            add((stepMs * i).coerceIn(100L, (metadata.durationMs - 100L).coerceAtLeast(100L)))
+            add((stepMs * i).coerceIn(80L, (metadata.durationMs - 80L).coerceAtLeast(80L)))
           }
           targetTimestampsMs.forEach { ts ->
-            val clamped = ts.coerceIn(100L, (metadata.durationMs - 100L).coerceAtLeast(100L))
-            if (none { abs(it - clamped) < 420L }) {
+            val clamped = ts.coerceIn(80L, (metadata.durationMs - 80L).coerceAtLeast(80L))
+            if (none { abs(it - clamped) < 350L }) {
               add(clamped)
             }
           }
-        }.sorted().take(16)
+        }.sorted().take(24)
 
       try {
         retriever.setDataSource(context, videoUri)
@@ -179,30 +221,83 @@ object VideoAnalysisService {
               rgb565
             }
 
-          // 1. Face detection (eyes/mouth) merged with segmentation upper-head veto zone
-          val faces = arrayOfNulls<FaceDetector.Face>(3)
-          val found = FaceDetector(detectorBitmap.width, detectorBitmap.height, 3).findFaces(detectorBitmap, faces)
+          // 1. ML Kit FaceDetector (primary: exact boundingBox + headEulerAngleZ roll angle for parallax)
           val frameFaces = mutableListOf<NormalizedRect>()
           var hasBottomHalfFace = false
-          for (f in 0 until found) {
-            val face = faces[f] ?: continue
-            val mid = android.graphics.PointF()
-            face.getMidPoint(mid)
-            val eyeDist = face.eyesDistance().coerceAtLeast(10f)
-            val halfW = (eyeDist * 1.75f) / detectorBitmap.width
-            val halfH = (eyeDist * 2.35f) / detectorBitmap.height
-            val cx = mid.x / detectorBitmap.width
-            val cy = mid.y / detectorBitmap.height
-            val rect =
-              NormalizedRect(
-                left = (cx - halfW).coerceIn(0f, 1f),
-                top = (cy - halfH).coerceIn(0f, 1f),
-                right = (cx + halfW).coerceIn(0f, 1f),
-                bottom = (cy + halfH).coerceIn(0f, 1f),
+          val rawW = raw.width.coerceAtLeast(1).toFloat()
+          val rawH = raw.height.coerceAtLeast(1).toFloat()
+          val mlFaces = detectMlKitFaces(raw)
+          if (mlFaces.isNotEmpty()) {
+            var primaryFace: Face? = null
+            var primaryArea = -1
+            for (face in mlFaces) {
+              val b = face.boundingBox
+              val area = b.width() * b.height()
+              if (area > primaryArea) {
+                primaryArea = area
+                primaryFace = face
+              }
+              val rect =
+                NormalizedRect(
+                  left = (b.left / rawW).coerceIn(0f, 1f),
+                  top = (b.top / rawH).coerceIn(0f, 1f),
+                  right = (b.right / rawW).coerceIn(0f, 1f),
+                  bottom = (b.bottom / rawH).coerceIn(0f, 1f),
+                )
+              frameFaces.add(rect)
+              faceRectsAll.add(rect)
+              if (rect.top > 0.38f) hasBottomHalfFace = true
+            }
+            primaryFace?.let { pf ->
+              val b = pf.boundingBox
+              val cx = (b.exactCenterX() / rawW).coerceIn(0f, 1f)
+              val cy = (b.exactCenterY() / rawH).coerceIn(0f, 1f)
+              val rollZ = pf.headEulerAngleZ.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
+              faceAnchorSamples.add(
+                FaceAnchorSample(
+                  timestampMs = tsMs,
+                  centerX = cx,
+                  centerY = cy,
+                  headEulerAngleZ = rollZ,
+                )
               )
-            frameFaces.add(rect)
-            faceRectsAll.add(rect)
-            if (rect.top > 0.38f) hasBottomHalfFace = true
+            }
+          } else {
+            // Fallback to Android FaceDetector if ML Kit finds no frontal face on this frame
+            val faces = arrayOfNulls<FaceDetector.Face>(3)
+            val found = FaceDetector(detectorBitmap.width, detectorBitmap.height, 3).findFaces(detectorBitmap, faces)
+            var fallbackAddedAnchor = false
+            for (f in 0 until found) {
+              val face = faces[f] ?: continue
+              val mid = android.graphics.PointF()
+              face.getMidPoint(mid)
+              val eyeDist = face.eyesDistance().coerceAtLeast(10f)
+              val halfW = (eyeDist * 1.75f) / detectorBitmap.width
+              val halfH = (eyeDist * 2.35f) / detectorBitmap.height
+              val cx = (mid.x / detectorBitmap.width).coerceIn(0f, 1f)
+              val cy = (mid.y / detectorBitmap.height).coerceIn(0f, 1f)
+              val rect =
+                NormalizedRect(
+                  left = (cx - halfW).coerceIn(0f, 1f),
+                  top = (cy - halfH).coerceIn(0f, 1f),
+                  right = (cx + halfW).coerceIn(0f, 1f),
+                  bottom = (cy + halfH).coerceIn(0f, 1f),
+                )
+              frameFaces.add(rect)
+              faceRectsAll.add(rect)
+              if (rect.top > 0.38f) hasBottomHalfFace = true
+              if (!fallbackAddedAnchor) {
+                faceAnchorSamples.add(
+                  FaceAnchorSample(
+                    timestampMs = tsMs,
+                    centerX = cx,
+                    centerY = cy,
+                    headEulerAngleZ = 0f,
+                  )
+                )
+                fallbackAddedAnchor = true
+              }
+            }
           }
 
           val mergedHeadVeto = mergeHeadVetoRects(frameFaces, subjectMetrics.headVetoRect)
@@ -367,6 +462,7 @@ object VideoAnalysisService {
         subjectCoverageFraction = avgSubjectCoverage,
         isSplitScreenDetected = isSplitDetected,
         shotAnalyses = shotAnalyses,
+        faceAnchorSamples = faceAnchorSamples.sortedBy { it.timestampMs },
       )
     }
 

@@ -33,13 +33,19 @@ import androidx.media3.transformer.VideoEncoderSettings
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.ExportPreferences
 import com.example.captionstudio.domain.model.ExportResolution
+import com.example.captionstudio.domain.model.FaceAnchorSample
 import com.example.captionstudio.engine.KineticCompositionRenderer
 import com.example.captionstudio.presets.PresetCatalog
 import java.io.File
 import java.io.FileInputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 sealed interface ExportUiState {
   data object Idle : ExportUiState
@@ -60,11 +66,25 @@ class VideoExportService(private val context: Context) {
   private val _state = MutableStateFlow<ExportUiState>(ExportUiState.Idle)
   val state: StateFlow<ExportUiState> = _state.asStateFlow()
 
-  private var activeTransformer: Transformer? = null
-  private var activeTempFile: File? = null
-  private var activeMaskProvider: SubjectMaskProcessor.ExportMaskProvider? = null
+  private val maskLock = Any()
+  private val exportIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  @Volatile private var activePrepJob: Job? = null
+  @Volatile private var activeTransformer: Transformer? = null
+  @Volatile private var activeTempFile: File? = null
+  @Volatile private var activeMaskProvider: SubjectMaskProcessor.ExportMaskProvider? = null
+  @Volatile private var exportSessionToken: Long = 0L
   private val mainHandler = Handler(Looper.getMainLooper())
   private var progressRunnable: Runnable? = null
+
+  private fun releaseActiveMaskProvider() {
+    val provider =
+      synchronized(maskLock) {
+        val current = activeMaskProvider
+        activeMaskProvider = null
+        current
+      }
+    runCatching { provider?.release() }
+  }
 
   @OptIn(UnstableApi::class)
   fun startExport(
@@ -73,6 +93,8 @@ class VideoExportService(private val context: Context) {
     presetId: String,
     exportPrefs: ExportPreferences,
     outputTitle: String,
+    faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
+    audioEnergyEnvelope10ms: FloatArray? = null,
   ) {
     if (videoUri == Uri.EMPTY) {
       _state.value = ExportUiState.Failed("Import a video before exporting an MP4 file.")
@@ -80,6 +102,9 @@ class VideoExportService(private val context: Context) {
     }
 
     cancelExport()
+    val sessionToken = System.nanoTime()
+    exportSessionToken = sessionToken
+
     val preset = PresetCatalog.findById(presetId)
     val renderer = KineticCompositionRenderer(context)
     val safeName =
@@ -90,130 +115,180 @@ class VideoExportService(private val context: Context) {
     activeTempFile = tempOutFile
 
     val needsSubjectMask = compositions.any { it.hasBehindSubjectElements() }
-    val maskProvider =
-      if (needsSubjectMask) SubjectMaskProcessor.ExportMaskProvider(context, videoUri) else null
-    activeMaskProvider = maskProvider
+    val preResolvedEnvelope =
+      audioEnergyEnvelope10ms ?: AudioExtractionService.getCachedNormalizedEnvelope(videoUri.toString())
 
     _state.value = ExportUiState.Exporting(0, "Preparing hardware video pipeline...")
 
-    mainHandler.post {
-      try {
-        val canvasOverlay =
-          object : CanvasOverlay(/* useInputFrameSize = */ true) {
-            private var width = 1080
-            private var height = 1920
-
-            override fun configure(videoSize: Size) {
-              super.configure(videoSize)
-              width = videoSize.width.coerceAtLeast(1)
-              height = videoSize.height.coerceAtLeast(1)
-            }
-
-            override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
-              canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-              val positionMs = presentationTimeUs / 1000L
-              val activeComp = compositions.firstOrNull { positionMs in it.startMs..it.endMs }
-              val subjectMask =
-                if (activeComp?.hasBehindSubjectElements() == true) {
-                  maskProvider?.getMaskAtTimeUs(presentationTimeUs)
-                } else {
-                  null
-                }
-              renderer.drawWithSubjectMask(
-                canvas = canvas,
-                canvasWidth = width,
-                canvasHeight = height,
-                compositions = compositions,
-                positionMs = positionMs,
-                subjectMaskBitmap = subjectMask,
-                wrapInOffscreenLayer = false,
-                shadowMultiplier = preset.shadowRadiusFactor,
-                drawSelectionGuide = false,
-              )
-              if (exportPrefs.showWatermark) {
-                renderer.drawWatermark(canvas, width, height)
-              }
-            }
-          }
-
-        val videoEffects = mutableListOf<Effect>()
-        val targetAspect =
-          exportPrefs.aspectRatio.ratioWidth / exportPrefs.aspectRatio.ratioHeight
-        videoEffects.add(
-          Presentation.createForAspectRatio(targetAspect, Presentation.LAYOUT_SCALE_TO_FIT)
-        )
-        if (exportPrefs.resolution != ExportResolution.RES_SOURCE) {
-          val heightTarget =
-            if (exportPrefs.aspectRatio.ratioWidth > exportPrefs.aspectRatio.ratioHeight) {
-              exportPrefs.resolution.shortEdgePx
-            } else if (exportPrefs.aspectRatio.ratioWidth == exportPrefs.aspectRatio.ratioHeight) {
-              exportPrefs.resolution.shortEdgePx
-            } else {
-              (exportPrefs.resolution.shortEdgePx * 16) / 9
-            }
-          videoEffects.add(Presentation.createForHeight(heightTarget))
+    val launchTransformer: (FloatArray?) -> Unit = { resolvedEnvelope ->
+      mainHandler.post {
+        if (exportSessionToken != sessionToken) {
+          runCatching { tempOutFile.delete() }
+          return@post
         }
-        videoEffects.add(
-          FrameDropEffect.createDefaultFrameDropEffect(exportPrefs.frameRate.fps.toFloat())
-        )
-        videoEffects.add(OverlayEffect(listOf(canvasOverlay)))
+        val maskProvider =
+          if (needsSubjectMask) SubjectMaskProcessor.ExportMaskProvider(context, videoUri) else null
+        synchronized(maskLock) {
+          activeMaskProvider = maskProvider
+        }
+        var startedSuccessfully = false
+        try {
+          val canvasOverlay =
+            object : CanvasOverlay(/* useInputFrameSize = */ true) {
+              private var width = 1080
+              private var height = 1920
 
-        val mediaItem = MediaItem.fromUri(videoUri)
-        val editedItem =
-          EditedMediaItem.Builder(mediaItem)
-            .setEffects(Effects(emptyList(), videoEffects))
-            .build()
+              override fun configure(videoSize: Size) {
+                super.configure(videoSize)
+                width = videoSize.width.coerceAtLeast(1)
+                height = videoSize.height.coerceAtLeast(1)
+              }
 
-        val encoderSettings =
-          VideoEncoderSettings.Builder()
-            .setBitrate(exportPrefs.qualityMode.bitrateMbps * 1_000_000)
-            .build()
-        val encoderFactory =
-          DefaultEncoderFactory.Builder(context)
-            .setRequestedVideoEncoderSettings(encoderSettings)
-            .setEnableFallback(true)
-            .build()
-
-        val transformer =
-          Transformer.Builder(context)
-            .setEncoderFactory(encoderFactory)
-            .addListener(
-              object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, result: ExportResult) {
-                  stopProgressPolling()
-                  activeMaskProvider?.release()
-                  activeMaskProvider = null
-                  verifyAndSaveToGallery(tempOutFile, safeName)
-                }
-
-                override fun onError(
-                  composition: Composition,
-                  result: ExportResult,
-                  exception: ExportException,
-                ) {
-                  stopProgressPolling()
-                  activeMaskProvider?.release()
-                  activeMaskProvider = null
-                  tempOutFile.delete()
-                  _state.value =
-                    ExportUiState.Failed(
-                      exception.localizedMessage ?: "Hardware MP4 export failed."
-                    )
+              override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
+                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                val positionMs = presentationTimeUs / 1000L
+                val activeComp = compositions.firstOrNull { positionMs in it.startMs..it.endMs }
+                val subjectMask =
+                  if (activeComp?.hasBehindSubjectElements() == true) {
+                    maskProvider?.getMaskAtTimeUs(presentationTimeUs)
+                  } else {
+                    null
+                  }
+                renderer.drawWithSubjectMask(
+                  canvas = canvas,
+                  canvasWidth = width,
+                  canvasHeight = height,
+                  compositions = compositions,
+                  positionMs = positionMs,
+                  subjectMaskBitmap = subjectMask,
+                  wrapInOffscreenLayer = false,
+                  shadowMultiplier = preset.shadowRadiusFactor,
+                  drawSelectionGuide = false,
+                  faceAnchorSamples = faceAnchorSamples,
+                  audioEnergyEnvelope10ms = resolvedEnvelope,
+                )
+                if (exportPrefs.showWatermark) {
+                  renderer.drawWatermark(canvas, width, height)
                 }
               }
-            )
-            .build()
 
-        activeTransformer = transformer
-        transformer.start(editedItem, tempOutFile.absolutePath)
-        startProgressPolling(transformer, needsSubjectMask)
-      } catch (e: Exception) {
-        activeMaskProvider?.release()
-        activeMaskProvider = null
-        tempOutFile.delete()
-        _state.value =
-          ExportUiState.Failed(e.localizedMessage ?: "Failed to initialize video export.")
+              override fun release() {
+                try {
+                  super.release()
+                } finally {
+                  if (maskProvider != null) {
+                    synchronized(maskLock) {
+                      if (activeMaskProvider === maskProvider) {
+                        activeMaskProvider = null
+                      }
+                    }
+                    runCatching { maskProvider.release() }
+                  }
+                }
+              }
+            }
+
+          val videoEffects = mutableListOf<Effect>()
+          val targetAspect =
+            exportPrefs.aspectRatio.ratioWidth / exportPrefs.aspectRatio.ratioHeight
+          videoEffects.add(
+            Presentation.createForAspectRatio(targetAspect, Presentation.LAYOUT_SCALE_TO_FIT)
+          )
+          if (exportPrefs.resolution != ExportResolution.RES_SOURCE) {
+            val heightTarget =
+              if (exportPrefs.aspectRatio.ratioWidth > exportPrefs.aspectRatio.ratioHeight) {
+                exportPrefs.resolution.shortEdgePx
+              } else if (exportPrefs.aspectRatio.ratioWidth == exportPrefs.aspectRatio.ratioHeight) {
+                exportPrefs.resolution.shortEdgePx
+              } else {
+                (exportPrefs.resolution.shortEdgePx * 16) / 9
+              }
+            videoEffects.add(Presentation.createForHeight(heightTarget))
+          }
+          videoEffects.add(
+            FrameDropEffect.createDefaultFrameDropEffect(exportPrefs.frameRate.fps.toFloat())
+          )
+          videoEffects.add(OverlayEffect(listOf(canvasOverlay)))
+
+          val mediaItem = MediaItem.fromUri(videoUri)
+          val editedItem =
+            EditedMediaItem.Builder(mediaItem)
+              .setEffects(Effects(emptyList(), videoEffects))
+              .build()
+
+          val encoderSettings =
+            VideoEncoderSettings.Builder()
+              .setBitrate(exportPrefs.qualityMode.bitrateMbps * 1_000_000)
+              .build()
+          val encoderFactory =
+            DefaultEncoderFactory.Builder(context)
+              .setRequestedVideoEncoderSettings(encoderSettings)
+              .setEnableFallback(true)
+              .build()
+
+          val transformer =
+            Transformer.Builder(context)
+              .setEncoderFactory(encoderFactory)
+              .addListener(
+                object : Transformer.Listener {
+                  override fun onCompleted(composition: Composition, result: ExportResult) {
+                    try {
+                      stopProgressPolling()
+                    } finally {
+                      releaseActiveMaskProvider()
+                    }
+                    verifyAndSaveToGallery(tempOutFile, safeName)
+                  }
+
+                  override fun onError(
+                    composition: Composition,
+                    result: ExportResult,
+                    exception: ExportException,
+                  ) {
+                    try {
+                      stopProgressPolling()
+                    } finally {
+                      releaseActiveMaskProvider()
+                      runCatching { tempOutFile.delete() }
+                    }
+                    _state.value =
+                      ExportUiState.Failed(
+                        exception.localizedMessage ?: "Hardware MP4 export failed."
+                      )
+                  }
+                }
+              )
+              .build()
+
+          activeTransformer = transformer
+          transformer.start(editedItem, tempOutFile.absolutePath)
+          startedSuccessfully = true
+          startProgressPolling(transformer, needsSubjectMask)
+        } catch (e: Exception) {
+          runCatching { tempOutFile.delete() }
+          _state.value =
+            ExportUiState.Failed(e.localizedMessage ?: "Failed to initialize video export.")
+        } finally {
+          if (!startedSuccessfully) {
+            releaseActiveMaskProvider()
+          }
+        }
       }
+    }
+
+    if (preResolvedEnvelope != null) {
+      launchTransformer(preResolvedEnvelope)
+    } else {
+      activePrepJob =
+        exportIoScope.launch {
+          val extractedEnvelope =
+            runCatching {
+              AudioExtractionService.extractNormalizedEnvelope10ms(context, videoUri)
+            }.getOrNull()
+          if (exportSessionToken == sessionToken) {
+            launchTransformer(extractedEnvelope)
+          }
+        }
     }
   }
 
@@ -332,17 +407,26 @@ class VideoExportService(private val context: Context) {
   }
 
   fun cancelExport() {
-    stopProgressPolling()
-    activeMaskProvider?.release()
-    activeMaskProvider = null
-    mainHandler.post {
-      runCatching { activeTransformer?.cancel() }
-      activeTransformer = null
-    }
-    activeTempFile?.delete()
-    activeTempFile = null
-    if (_state.value is ExportUiState.Exporting) {
-      _state.value = ExportUiState.Idle
+    exportSessionToken = 0L
+    activePrepJob?.cancel()
+    activePrepJob = null
+    try {
+      stopProgressPolling()
+      mainHandler.post {
+        try {
+          runCatching { activeTransformer?.cancel() }
+          activeTransformer = null
+        } finally {
+          releaseActiveMaskProvider()
+        }
+      }
+    } finally {
+      releaseActiveMaskProvider()
+      runCatching { activeTempFile?.delete() }
+      activeTempFile = null
+      if (_state.value is ExportUiState.Exporting) {
+        _state.value = ExportUiState.Idle
+      }
     }
   }
 
