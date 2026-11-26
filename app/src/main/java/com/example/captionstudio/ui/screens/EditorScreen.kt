@@ -117,6 +117,7 @@ import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.SafeRegion
 import com.example.captionstudio.domain.model.SafeZonePlatform
+import com.example.captionstudio.media.AudioExtractionService
 import com.example.captionstudio.media.AutoTranscribeUiState
 import com.example.captionstudio.media.ExportUiState
 import com.example.captionstudio.media.OfflineVoicePackStatus
@@ -219,6 +220,10 @@ fun EditorScreen(
   onSetAllKaraokeMode: (KaraokeHighlightMode) -> Unit = {},
   onQuickEditWord: (Int, String, HierarchyLevel, Boolean) -> Unit = { _, _, _, _ -> },
   onDeleteWord: (Int) -> Unit = {},
+  audioWaveformBins: List<Float> = emptyList(),
+  onBeatSync: () -> Unit = {},
+  onTrimSilences: () -> Unit = {},
+  onRestoreOriginalCut: () -> Unit = {},
   onOpenExport: () -> Unit,
   onBack: () -> Unit,
 ) {
@@ -281,7 +286,26 @@ fun EditorScreen(
       ?: project.compositions.firstOrNull { it.id == selectedCompositionId }
       ?: project.compositions.firstOrNull()
 
-  val totalDuration = max(project.metadata.durationMs, project.compositions.maxOfOrNull { it.endMs } ?: 8000L)
+  val keepSegments = project.analysisReport.keepSegments
+  val editedVideoDurationMs =
+    remember(keepSegments, project.metadata.durationMs) {
+      AudioExtractionService.computeEditedDurationMs(keepSegments, project.metadata.durationMs)
+    }
+  val savedSilenceMs =
+    if (keepSegments.isNotEmpty()) {
+      (project.metadata.durationMs - editedVideoDurationMs).coerceAtLeast(0L)
+    } else {
+      0L
+    }
+  val displayedBeats =
+    remember(project.analysisReport.beatTimestampsMs, keepSegments) {
+      AudioExtractionService.remapBeatsToEditedTimeline(
+        sourceBeatsMs = project.analysisReport.beatTimestampsMs,
+        keepSegments = keepSegments,
+      )
+    }
+  val effectiveWaveformBins = audioWaveformBins.ifEmpty { autoTranscribeState.waveformBins }
+  val totalDuration = max(editedVideoDurationMs, project.compositions.maxOfOrNull { it.endMs } ?: 8000L)
 
   Scaffold(
     containerColor = StudioObsidian,
@@ -338,6 +362,7 @@ fun EditorScreen(
             },
             onPinchScaleComposition = onPinchScaleComposition,
             modifier = Modifier.fillMaxHeight(),
+            keepSegments = keepSegments,
           )
 
           // Top-left discreet glass utility pills with strict 48dp x 48dp touch areas: Undo | Redo | Mute
@@ -648,7 +673,10 @@ fun EditorScreen(
               activeComp = activeComp,
               playheadMs = playheadMs,
               totalDurationMs = totalDuration,
-              waveformBins = autoTranscribeState.waveformBins,
+              waveformBins = effectiveWaveformBins,
+              beatTimestampsMs = displayedBeats,
+              isSilenceTrimmed = keepSegments.isNotEmpty(),
+              savedSilenceMs = savedSilenceMs,
               customPresets = customPresets,
               safeZonePlatform = safeZonePlatform,
               isBusy = isBusy,
@@ -661,6 +689,9 @@ fun EditorScreen(
               onCycleSafeZone = onCycleSafeZone,
               onToggleDepthMask = { activeComp?.let { onToggleDepthMask(it.id) } },
               onAutoTranscribe = onAutoTranscribeVideo,
+              onBeatSync = onBeatSync,
+              onTrimSilences = onTrimSilences,
+              onRestoreOriginalCut = onRestoreOriginalCut,
               onOpenScriptEditor = {
                 onSetCreatorMode(false)
                 activeTool = EditorTool.TIMING
@@ -876,6 +907,8 @@ fun EditorScreen(
                     editingWordIndex = idx
                   },
                   onApplyAnimation = onApplyAnimation,
+                  waveformBins = effectiveWaveformBins,
+                  beatTimestampsMs = displayedBeats,
                 )
               }
             }
@@ -967,6 +1000,7 @@ fun EditorScreen(
             },
             onPinchScaleComposition = onPinchScaleComposition,
             modifier = Modifier.fillMaxHeight(),
+            keepSegments = keepSegments,
           )
         }
         Row(

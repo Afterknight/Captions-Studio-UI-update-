@@ -568,6 +568,16 @@ data class FaceAnchorSample(
 
 @Immutable
 @Serializable
+data class KeepSegment(
+  val sourceStartMs: Long,
+  val sourceEndMs: Long,
+) {
+  val durationMs: Long
+    get() = (sourceEndMs - sourceStartMs).coerceAtLeast(0L)
+}
+
+@Immutable
+@Serializable
 data class VideoAnalysisReport(
   val frameCountSampled: Int = 0,
   val sceneChangeTimestampsMs: List<Long> = emptyList(),
@@ -587,6 +597,10 @@ data class VideoAnalysisReport(
   val isSplitScreenDetected: Boolean = false,
   val shotAnalyses: List<ShotVisualAnalysis> = emptyList(),
   val faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
+  val beatTimestampsMs: List<Long> = emptyList(),
+  val keepSegments: List<KeepSegment> = emptyList(),
+  val originalCompositionsBackup: List<CaptionComposition> = emptyList(),
+  val originalWordTimingsBackup: List<WordTiming> = emptyList(),
 )
 
 typealias VideoAnalysisResult = VideoAnalysisReport

@@ -103,6 +103,7 @@ fun CaptionStudioApp(
   val voicePackStatuses by studioViewModel.voicePackStatuses.collectAsStateWithLifecycle()
   val transcribedSegments by studioViewModel.transcribedSegments.collectAsStateWithLifecycle()
   val fontsVersion by studioViewModel.fontsVersion.collectAsStateWithLifecycle()
+  val audioWaveformBins by studioViewModel.audioWaveformBins.collectAsStateWithLifecycle()
 
   var showProSheet by remember { mutableStateOf(false) }
 
@@ -335,6 +336,10 @@ fun CaptionStudioApp(
             onSetAllKaraokeMode = { mode -> studioViewModel.setAllKaraokeMode(mode) },
             onQuickEditWord = studioViewModel::quickEditWord,
             onDeleteWord = studioViewModel::deleteWordAt,
+            audioWaveformBins = audioWaveformBins,
+            onBeatSync = studioViewModel::beatSyncCompositions,
+            onTrimSilences = studioViewModel::trimSilencesAutoJumpCut,
+            onRestoreOriginalCut = studioViewModel::restoreOriginalCut,
             onOpenExport = {
               studioViewModel.resetExportState()
               navController.navigate(ExportRoute(route.projectId))

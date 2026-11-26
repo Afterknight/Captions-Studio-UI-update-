@@ -26,11 +26,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -98,6 +100,9 @@ fun CreatorModeQuickPanel(
   playheadMs: Long,
   totalDurationMs: Long = 8000L,
   waveformBins: List<Float> = emptyList(),
+  beatTimestampsMs: List<Long> = emptyList(),
+  isSilenceTrimmed: Boolean = false,
+  savedSilenceMs: Long = 0L,
   customPresets: List<PresetDefinition>,
   safeZonePlatform: SafeZonePlatform,
   isBusy: Boolean,
@@ -110,6 +115,9 @@ fun CreatorModeQuickPanel(
   onCycleSafeZone: () -> Unit,
   onToggleDepthMask: () -> Unit,
   onAutoTranscribe: () -> Unit,
+  onBeatSync: () -> Unit = {},
+  onTrimSilences: () -> Unit = {},
+  onRestoreOriginalCut: () -> Unit = {},
   onOpenScriptEditor: () -> Unit,
   onSelectComposition: (String) -> Unit = {},
   onUpdateTiming: (String, Long, Long) -> Unit = { _, _, _ -> },
@@ -342,6 +350,33 @@ fun CreatorModeQuickPanel(
             onClick = onAutoTranscribe,
             modifier = Modifier.testTag("creator_transcribe_button"),
           )
+          CreatorQuickToggleChip(
+            icon = Icons.Filled.Bolt,
+            label = "🧲 Beat Sync",
+            active = beatTimestampsMs.isNotEmpty(),
+            onClick = onBeatSync,
+            modifier = Modifier.testTag("creator_beat_sync_button"),
+          )
+          if (isSilenceTrimmed) {
+            val savedLabel =
+              if (savedSilenceMs >= 100L) "Restore Original Cut (-${String.format(java.util.Locale.US, "%.1f", savedSilenceMs / 1000f)}s)"
+              else "Restore Original Cut"
+            CreatorQuickToggleChip(
+              icon = Icons.Filled.Restore,
+              label = savedLabel,
+              active = true,
+              onClick = onRestoreOriginalCut,
+              modifier = Modifier.testTag("creator_restore_cut_button"),
+            )
+          } else {
+            CreatorQuickToggleChip(
+              icon = Icons.Filled.ContentCut,
+              label = "✂️ Trim Silences",
+              active = false,
+              onClick = onTrimSilences,
+              modifier = Modifier.testTag("creator_trim_silences_button"),
+            )
+          }
         }
 
         // 1-Tap Active-Word Karaoke Mode Strip
@@ -470,6 +505,7 @@ fun CreatorModeQuickPanel(
         onSeekPlayhead = onWordClickSeek,
         onSelectComposition = onSelectComposition,
         onTrimComposition = onUpdateTiming,
+        beatTimestampsMs = beatTimestampsMs,
       )
     }
 

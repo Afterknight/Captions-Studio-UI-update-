@@ -17,6 +17,7 @@ import com.example.R
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.ExportPreferences
 import com.example.captionstudio.domain.model.FaceAnchorSample
+import com.example.captionstudio.domain.model.KeepSegment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +40,7 @@ object VideoExportCoordinator {
     val outputTitle: String,
     val faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
     val audioEnergyEnvelope10ms: FloatArray? = null,
+    val keepSegments: List<KeepSegment> = emptyList(),
   )
 
   @Volatile var pendingJob: PendingExportJob? = null
@@ -62,6 +64,7 @@ object VideoExportCoordinator {
     outputTitle: String,
     faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
     audioEnergyEnvelope10ms: FloatArray? = null,
+    keepSegments: List<KeepSegment> = emptyList(),
   ) {
     val appCtx = context.applicationContext
     val job =
@@ -73,6 +76,7 @@ object VideoExportCoordinator {
         outputTitle = outputTitle,
         faceAnchorSamples = faceAnchorSamples,
         audioEnergyEnvelope10ms = audioEnergyEnvelope10ms,
+        keepSegments = keepSegments,
       )
     pendingJob = job
 
@@ -97,6 +101,7 @@ object VideoExportCoordinator {
         outputTitle = outputTitle,
         faceAnchorSamples = faceAnchorSamples,
         audioEnergyEnvelope10ms = audioEnergyEnvelope10ms,
+        keepSegments = keepSegments,
       )
     }
   }
@@ -165,6 +170,7 @@ class VideoExportForegroundService : Service() {
           outputTitle = job.outputTitle,
           faceAnchorSamples = job.faceAnchorSamples,
           audioEnergyEnvelope10ms = job.audioEnergyEnvelope10ms,
+          keepSegments = job.keepSegments,
         )
       }
     }

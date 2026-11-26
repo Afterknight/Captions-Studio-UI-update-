@@ -1009,6 +1009,8 @@ internal fun TimingWorkspacePanel(
   onToggleDictation: () -> Unit,
   onEditWordTiming: (Int) -> Unit,
   onApplyAnimation: (String, ApplyScope, EntryAnimationType, ExitAnimationType, AnimationEasingType, Int, Int) -> Unit,
+  waveformBins: List<Float> = emptyList(),
+  beatTimestampsMs: List<Long> = emptyList(),
 ) {
   var subTab by remember { mutableIntStateOf(0) }
   var editingSegment by remember { mutableStateOf<VoskTextSegment?>(null) }
@@ -1067,7 +1069,7 @@ internal fun TimingWorkspacePanel(
             if (project.compositions.isNotEmpty()) {
               VisualCaptionTimeline(
                 compositions = project.compositions,
-                waveformBins = autoTranscribeState.waveformBins,
+                waveformBins = waveformBins.ifEmpty { autoTranscribeState.waveformBins },
                 totalDurationMs = totalDurationMs,
                 playheadMs = playheadMs,
                 selectedCompositionId = activeComp?.id,
@@ -1076,6 +1078,7 @@ internal fun TimingWorkspacePanel(
                   project.compositions.firstOrNull { it.id == compId }?.let(onSelectComposition)
                 },
                 onTrimComposition = onUpdateTiming,
+                beatTimestampsMs = beatTimestampsMs,
               )
             }
             if (activeComp != null) {

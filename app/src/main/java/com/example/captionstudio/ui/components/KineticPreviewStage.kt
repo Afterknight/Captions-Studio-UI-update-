@@ -92,10 +92,12 @@ import androidx.media3.ui.PlayerView
 import com.example.R
 import com.example.captionstudio.domain.model.AspectRatioOption
 import com.example.captionstudio.domain.model.CaptionComposition
+import com.example.captionstudio.domain.model.KeepSegment
 import com.example.captionstudio.domain.model.PreviewQualityMode
 import com.example.captionstudio.domain.model.SafeZonePlatform
 import com.example.captionstudio.domain.model.VideoAnalysisReport
 import com.example.captionstudio.engine.KineticCompositionRenderer
+import com.example.captionstudio.media.AudioExtractionService
 import com.example.captionstudio.media.SubjectMaskProcessor
 import com.example.captionstudio.presets.PresetCatalog
 import com.example.ui.theme.CaptionRed
@@ -201,6 +203,7 @@ fun KineticPreviewStage(
   onDragCompositionAnchor: (compId: String, anchorX: Float, anchorY: Float) -> Unit,
   onPinchScaleComposition: (compId: String, scaleMultiplier: Float, recordHistory: Boolean) -> Unit = { _, _, _ -> },
   modifier: Modifier = Modifier,
+  keepSegments: List<KeepSegment> = emptyList(),
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -256,20 +259,46 @@ fun KineticPreviewStage(
       }
     }
   }
+  val validKeepSegments =
+    remember(keepSegments) { keepSegments.filter { it.sourceEndMs > it.sourceStartMs + 40L } }
+  val latestKeepSegments by rememberUpdatedState(validKeepSegments)
   val exoPlayer =
     remember(videoUriString) {
       if (hasVideo) {
         ExoPlayer.Builder(context).build().apply {
           videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-          setMediaItem(MediaItem.fromUri(Uri.parse(videoUriString)))
           repeatMode = if (repeatLoop) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
-          if (latestPlayhead > 0L) seekTo(latestPlayhead)
-          prepare()
         }
       } else {
         null
       }
     }
+
+  LaunchedEffect(exoPlayer, videoUriString, validKeepSegments) {
+    if (exoPlayer == null || !hasVideo) return@LaunchedEffect
+    val parsedUri = Uri.parse(videoUriString)
+    val wasPlaying = exoPlayer.playWhenReady
+    if (validKeepSegments.isNotEmpty()) {
+      val clippedItems =
+        validKeepSegments.map { seg ->
+          MediaItem.Builder()
+            .setUri(parsedUri)
+            .setClippingConfiguration(
+              MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(seg.sourceStartMs.coerceAtLeast(0L))
+                .setEndPositionMs(seg.sourceEndMs)
+                .build()
+            )
+            .build()
+        }
+      exoPlayer.setMediaItems(clippedItems, true)
+    } else {
+      exoPlayer.setMediaItem(MediaItem.fromUri(parsedUri))
+    }
+    exoPlayer.prepare()
+    seekPlayerToEditedTime(exoPlayer, latestPlayhead, validKeepSegments)
+    exoPlayer.playWhenReady = wasPlaying || latestIsPlaying
+  }
 
   DisposableEffect(exoPlayer) {
     if (exoPlayer == null) {
@@ -334,11 +363,12 @@ fun KineticPreviewStage(
   }
 
   // Seek ExoPlayer when user scrubs timeline while paused
-  LaunchedEffect(exoPlayer, playheadMs, isPlaying) {
+  LaunchedEffect(exoPlayer, playheadMs, isPlaying, validKeepSegments) {
     if (exoPlayer != null && !isPlaying) {
-      val diff = abs(exoPlayer.currentPosition - playheadMs)
+      val currentEditedPos = computeEditedPlayheadFromPlayer(exoPlayer, validKeepSegments)
+      val diff = abs(currentEditedPos - playheadMs)
       if (diff > 45L) {
-        exoPlayer.seekTo(playheadMs)
+        seekPlayerToEditedTime(exoPlayer, playheadMs, validKeepSegments)
       }
     }
   }
@@ -357,7 +387,7 @@ fun KineticPreviewStage(
         if (exoPlayer != null) {
           if (frameMs - lastCanvasTickMs >= canvasStepMs) {
             lastCanvasTickMs = frameMs
-            val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val pos = computeEditedPlayheadFromPlayer(exoPlayer, latestKeepSegments)
             localPlayheadMs = pos
             if (frameMs - lastParentSyncMs >= parentSyncIntervalMs) {
               lastParentSyncMs = frameMs
@@ -405,19 +435,24 @@ fun KineticPreviewStage(
   val needsSubjectMask = hasVideo && activeComp?.hasBehindSubjectElements() == true
 
   // Tightly frame-locked live-preview subject mask loop (eliminates parent-playhead lag & seek drift)
-  LaunchedEffect(videoUriString, needsSubjectMask, isPlaying, effectivePerformanceMode, playheadMs.takeIf { !isPlaying }) {
+  LaunchedEffect(videoUriString, needsSubjectMask, isPlaying, effectivePerformanceMode, validKeepSegments, playheadMs.takeIf { !isPlaying }) {
     if (!needsSubjectMask) {
       activeSubjectMask = null
       return@LaunchedEffect
     }
-    var lastProcessedPosMs = Long.MIN_VALUE
+    var lastProcessedSourcePosMs = Long.MIN_VALUE
     val targetIntervalMs = if (effectivePerformanceMode) 68L else 36L
 
     while (isActive) {
-      val livePosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: localPlayheadMs
-      val jumped = lastProcessedPosMs != Long.MIN_VALUE && abs(livePosMs - lastProcessedPosMs) > 240L
+      val liveEditedPosMs =
+        exoPlayer?.let { computeEditedPlayheadFromPlayer(it, latestKeepSegments) } ?: localPlayheadMs
+      val liveSourcePosMs =
+        AudioExtractionService.mapEditedToSourceTimeMs(liveEditedPosMs, latestKeepSegments)
+      val jumped =
+        lastProcessedSourcePosMs != Long.MIN_VALUE &&
+          abs(liveSourcePosMs - lastProcessedSourcePosMs) > 240L
       if (jumped) {
-        // Seek jump or loop wrap: immediately flush temporal filter so stale cutout never lags behind
+        // Seek jump, jump-cut seam, or loop wrap: flush temporal filter so stale cutout never lags
         SubjectMaskProcessor.invalidatePreviewTemporalState()
         activeSubjectMask = null
       }
@@ -429,9 +464,9 @@ fun KineticPreviewStage(
 
       if (texView != null && pv != null && texView.isAvailable && texView.width > 0 && texView.height > 0) {
         activeMaskVideoRect = computeTextureRectInParent(pv, texView)
-        val cached = SubjectMaskProcessor.getCachedMask(videoUriString, livePosMs)
+        val cached = SubjectMaskProcessor.getCachedMask(videoUriString, liveSourcePosMs)
         val shouldComputeFresh =
-          cached == null || jumped || abs(livePosMs - lastProcessedPosMs) >= targetIntervalMs
+          cached == null || jumped || abs(liveSourcePosMs - lastProcessedSourcePosMs) >= targetIntervalMs
 
         if (cached != null && !jumped) {
           activeSubjectMask = cached
@@ -441,20 +476,23 @@ fun KineticPreviewStage(
           val texRatio = (texView.width.toFloat() / texView.height.toFloat()).coerceIn(0.35f, 3.0f)
           val sampleW = if (effectivePerformanceMode) 224 else 320
           val sampleH = (sampleW / texRatio).toInt().coerceIn(128, 480)
-          val capturePosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: livePosMs
+          val captureEditedPosMs =
+            exoPlayer?.let { computeEditedPlayheadFromPlayer(it, latestKeepSegments) } ?: liveEditedPosMs
+          val captureSourcePosMs =
+            AudioExtractionService.mapEditedToSourceTimeMs(captureEditedPosMs, latestKeepSegments)
           val snap = runCatching { texView.getBitmap(sampleW, sampleH) }.getOrNull()
           if (snap != null) {
             val computed =
               SubjectMaskProcessor.generateAndCacheMask(
                 videoKey = videoUriString,
-                positionMs = capturePosMs,
+                positionMs = captureSourcePosMs,
                 frameBitmap = snap,
                 highPrecision = !effectivePerformanceMode,
               )
             snap.recycle()
             if (computed != null) {
               activeSubjectMask = computed
-              lastProcessedPosMs = capturePosMs
+              lastProcessedSourcePosMs = captureSourcePosMs
             }
           }
         }
@@ -716,6 +754,8 @@ fun KineticPreviewStage(
       val shadowFactor =
         if (effectivePerformanceMode) 0.55f else preset.shadowRadiusFactor
       val drawPositionMs = localPlayheadMs
+      val drawSourcePosMs =
+        AudioExtractionService.mapEditedToSourceTimeMs(drawPositionMs, latestKeepSegments)
 
       drawIntoCanvas { canvas ->
         renderer.drawWithSubjectMask(
@@ -732,6 +772,7 @@ fun KineticPreviewStage(
           videoContentRect = activeMaskVideoRect,
           faceAnchorSamples = analysisReport.faceAnchorSamples,
           audioEnergyEnvelope10ms = audioEnergyEnvelope,
+          sourceTimeMs = drawSourcePosMs,
         )
       }
 
@@ -1052,6 +1093,42 @@ private fun computeTextureRectInParent(parent: View, child: View): RectF? {
   val bottom = top + child.height.toFloat()
   if (right <= left || bottom <= top) return null
   return RectF(left, top, right, bottom)
+}
+
+private fun computeEditedPlayheadFromPlayer(
+  player: ExoPlayer,
+  keepSegments: List<KeepSegment>,
+): Long {
+  if (keepSegments.isEmpty()) return player.currentPosition.coerceAtLeast(0L)
+  val itemIdx = player.currentMediaItemIndex.coerceIn(0, keepSegments.lastIndex)
+  var prefixMs = 0L
+  for (i in 0 until itemIdx) {
+    prefixMs += keepSegments[i].durationMs
+  }
+  val inSegmentMs = player.currentPosition.coerceIn(0L, keepSegments[itemIdx].durationMs)
+  return prefixMs + inSegmentMs
+}
+
+private fun seekPlayerToEditedTime(
+  player: ExoPlayer,
+  editedMs: Long,
+  keepSegments: List<KeepSegment>,
+) {
+  val clampedEdited = editedMs.coerceAtLeast(0L)
+  if (keepSegments.isEmpty()) {
+    player.seekTo(clampedEdited)
+    return
+  }
+  var cursor = 0L
+  for (idx in keepSegments.indices) {
+    val segDur = keepSegments[idx].durationMs
+    if (clampedEdited < cursor + segDur || idx == keepSegments.lastIndex) {
+      val offsetInSeg = (clampedEdited - cursor).coerceIn(0L, segDur)
+      player.seekTo(idx, offsetInSeg)
+      return
+    }
+    cursor += segDur
+  }
 }
 
 private fun formatReviewTimecode(ms: Long): String {

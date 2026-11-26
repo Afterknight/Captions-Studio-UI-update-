@@ -65,6 +65,7 @@ import com.example.ui.theme.StudioHairlineStrong
 import com.example.ui.theme.StudioObsidian
 import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -95,9 +96,32 @@ fun clampTrimRange(
 }
 
 /**
+ * Returns the nearest audio transient timestamp within ±[toleranceMs] of [timestampMs],
+ * or null if no beat transient is within the magnetic snap window.
+ */
+fun snapTimestampToNearestBeat(
+  timestampMs: Long,
+  beatTimestampsMs: List<Long>,
+  toleranceMs: Long = 80L,
+): Long? {
+  if (beatTimestampsMs.isEmpty() || toleranceMs <= 0L) return null
+  var bestBeat: Long? = null
+  var bestDiff = Long.MAX_VALUE
+  for (beat in beatTimestampsMs) {
+    val diff = abs(beat - timestampMs)
+    if (diff <= toleranceMs && diff < bestDiff) {
+      bestDiff = diff
+      bestBeat = beat
+    }
+  }
+  return bestBeat
+}
+
+/**
  * Interactive Visual Waveform Caption Timeline:
- * Renders the video's audio amplitude waveform with caption blocks directly aligned on top,
- * featuring draggable left & right trim handles, horizontal zoom (1x/2x/4x), and playhead scrubbing.
+ * Renders the video's audio amplitude waveform with beat-tick markers and caption blocks directly
+ * aligned on top, featuring draggable left & right trim handles with magnetic ±80ms beat snapping,
+ * horizontal zoom (1x/2x/4x), and playhead scrubbing.
  */
 @Composable
 fun VisualCaptionTimeline(
@@ -110,6 +134,7 @@ fun VisualCaptionTimeline(
   onSelectComposition: (String) -> Unit,
   onTrimComposition: (compId: String, newStartMs: Long, newEndMs: Long) -> Unit,
   modifier: Modifier = Modifier,
+  beatTimestampsMs: List<Long> = emptyList(),
 ) {
   val density = LocalDensity.current
   val haptic = LocalHapticFeedback.current
@@ -119,6 +144,8 @@ fun VisualCaptionTimeline(
     }
   var zoomFactor by remember { mutableFloatStateOf(1f) }
   var activeTrimReadout by remember { mutableStateOf<String?>(null) }
+  var activeSnappedBeatMs by remember { mutableStateOf<Long?>(null) }
+  val latestBeats by rememberUpdatedState(beatTimestampsMs)
 
   StudioGlassCard(modifier = modifier.fillMaxWidth().testTag("visual_waveform_timeline"), cornerRadius = 20.dp) {
     Column(
@@ -272,6 +299,28 @@ fun VisualCaptionTimeline(
                 cornerRadius = CornerRadius(barW / 2f, barW / 2f),
               )
             }
+
+            // Subtle vertical beat-tick markers at detected audio transient onsets
+            if (beatTimestampsMs.isNotEmpty()) {
+              val beatGold = Color(0xFFFFD166)
+              beatTimestampsMs.forEach { beatMs ->
+                if (beatMs in 0L..effectiveDurationMs) {
+                  val bx = (beatMs.toFloat() / effectiveDurationMs.toFloat()) * size.width
+                  val isSnapped = activeSnappedBeatMs == beatMs
+                  drawLine(
+                    color = if (isSnapped) beatGold else beatGold.copy(alpha = 0.34f),
+                    start = Offset(bx, rulerH),
+                    end = Offset(bx, size.height - 4.dp.toPx()),
+                    strokeWidth = if (isSnapped) 2.6f else 1.2f,
+                  )
+                  drawCircle(
+                    color = if (isSnapped) beatGold else beatGold.copy(alpha = 0.68f),
+                    radius = if (isSnapped) 3.4.dp.toPx() else 2.dp.toPx(),
+                    center = Offset(bx, rulerH),
+                  )
+                }
+              }
+            }
           }
 
           // 2. Caption Blocks Overlaid on Waveform with Draggable Left & Right Trim Handles
@@ -382,9 +431,11 @@ fun VisualCaptionTimeline(
                   .height(84.dp)
                   .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
                     var accumStartMs = draftStartMs.toFloat()
+                    var lastSnappedBeat: Long? = null
                     detectHorizontalDragGestures(
                       onDragStart = {
                         accumStartMs = latestDraftStart.toFloat()
+                        lastSnappedBeat = null
                         onSelectComposition(comp.id)
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                       },
@@ -392,24 +443,42 @@ fun VisualCaptionTimeline(
                         change.consume()
                         val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
                         accumStartMs += deltaMs
+                        val rawProposed = accumStartMs.toLong()
+                        val snappedBeat =
+                          snapTimestampToNearestBeat(
+                            timestampMs = rawProposed,
+                            beatTimestampsMs = latestBeats,
+                            toleranceMs = 80L,
+                          )
+                        val effectiveProposed = snappedBeat ?: rawProposed
                         val (clampedStart, clampedEnd) =
                           clampTrimRange(
-                            proposedStartMs = accumStartMs.toLong(),
+                            proposedStartMs = effectiveProposed,
                             proposedEndMs = latestDraftEnd,
                             totalDurationMs = effectiveDurationMs,
                             prevCompEndMs = prevEnd,
                             nextCompStartMs = nextStart,
                           )
+                        val activeSnap = snappedBeat?.takeIf { clampedStart == it }
+                        if (activeSnap != null && activeSnap != lastSnappedBeat) {
+                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        lastSnappedBeat = activeSnap
+                        activeSnappedBeatMs = activeSnap
                         draftStartMs = clampedStart
                         draftEndMs = clampedEnd
-                        activeTrimReadout = "In: ${formatTimelineSec(clampedStart)}"
+                        activeTrimReadout =
+                          if (activeSnap != null) "In: ${formatTimelineSec(clampedStart)} • 🧲 Beat"
+                          else "In: ${formatTimelineSec(clampedStart)}"
                       },
                       onDragEnd = {
                         activeTrimReadout = null
+                        activeSnappedBeatMs = null
                         latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
                       },
                       onDragCancel = {
                         activeTrimReadout = null
+                        activeSnappedBeatMs = null
                         draftStartMs = comp.startMs
                         draftEndMs = comp.endMs
                       },
@@ -448,9 +517,11 @@ fun VisualCaptionTimeline(
                   .height(84.dp)
                   .pointerInput(comp.id, effectiveDurationMs, trackWidthPx, prevEnd, nextStart) {
                     var accumEndMs = draftEndMs.toFloat()
+                    var lastSnappedBeat: Long? = null
                     detectHorizontalDragGestures(
                       onDragStart = {
                         accumEndMs = latestDraftEnd.toFloat()
+                        lastSnappedBeat = null
                         onSelectComposition(comp.id)
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                       },
@@ -458,24 +529,42 @@ fun VisualCaptionTimeline(
                         change.consume()
                         val deltaMs = (dragAmount / trackWidthPx) * effectiveDurationMs.toFloat()
                         accumEndMs += deltaMs
+                        val rawProposed = accumEndMs.toLong()
+                        val snappedBeat =
+                          snapTimestampToNearestBeat(
+                            timestampMs = rawProposed,
+                            beatTimestampsMs = latestBeats,
+                            toleranceMs = 80L,
+                          )
+                        val effectiveProposed = snappedBeat ?: rawProposed
                         val (clampedStart, clampedEnd) =
                           clampTrimRange(
                             proposedStartMs = latestDraftStart,
-                            proposedEndMs = accumEndMs.toLong(),
+                            proposedEndMs = effectiveProposed,
                             totalDurationMs = effectiveDurationMs,
                             prevCompEndMs = prevEnd,
                             nextCompStartMs = nextStart,
                           )
+                        val activeSnap = snappedBeat?.takeIf { clampedEnd == it }
+                        if (activeSnap != null && activeSnap != lastSnappedBeat) {
+                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        lastSnappedBeat = activeSnap
+                        activeSnappedBeatMs = activeSnap
                         draftStartMs = clampedStart
                         draftEndMs = clampedEnd
-                        activeTrimReadout = "Out: ${formatTimelineSec(clampedEnd)}"
+                        activeTrimReadout =
+                          if (activeSnap != null) "Out: ${formatTimelineSec(clampedEnd)} • 🧲 Beat"
+                          else "Out: ${formatTimelineSec(clampedEnd)}"
                       },
                       onDragEnd = {
                         activeTrimReadout = null
+                        activeSnappedBeatMs = null
                         latestOnTrim(comp.id, latestDraftStart, latestDraftEnd)
                       },
                       onDragCancel = {
                         activeTrimReadout = null
+                        activeSnappedBeatMs = null
                         draftStartMs = comp.startMs
                         draftEndMs = comp.endMs
                       },

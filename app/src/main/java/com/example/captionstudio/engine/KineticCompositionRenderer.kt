@@ -191,6 +191,7 @@ class KineticCompositionRenderer(private val context: Context) {
     drawSelectionGuide: Boolean = false,
     faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
     audioEnergyEnvelope10ms: FloatArray? = null,
+    sourceTimeMs: Long = positionMs,
   ) {
     drawWithSubjectMask(
       canvas = canvas,
@@ -205,6 +206,7 @@ class KineticCompositionRenderer(private val context: Context) {
       drawSelectionGuide = drawSelectionGuide,
       faceAnchorSamples = faceAnchorSamples,
       audioEnergyEnvelope10ms = audioEnergyEnvelope10ms,
+      sourceTimeMs = sourceTimeMs,
     )
   }
 
@@ -228,6 +230,7 @@ class KineticCompositionRenderer(private val context: Context) {
     videoContentRect: RectF? = null,
     faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
     audioEnergyEnvelope10ms: FloatArray? = null,
+    sourceTimeMs: Long = positionMs,
   ) {
     if (canvasWidth <= 0 || canvasHeight <= 0) return
     val active = compositions.firstOrNull { positionMs in it.startMs..it.endMs } ?: return
@@ -245,13 +248,13 @@ class KineticCompositionRenderer(private val context: Context) {
         (active.spatialMode == SpatialLayoutMode.CURVED_ARC_PATH ||
           active.spatialMode == SpatialLayoutMode.LEFT_RIGHT_SPLIT)
       ) {
-        computeHeadParallaxTransform(faceAnchorSamples, positionMs)
+        computeHeadParallaxTransform(faceAnchorSamples, sourceTimeMs)
       } else {
         FaceParallaxTransform.ZERO
       }
     val vocalEnergy01 =
       if (audioEnergyEnvelope10ms != null && audioEnergyEnvelope10ms.isNotEmpty()) {
-        AudioExtractionService.getNormalizedEnergyAt(audioEnergyEnvelope10ms, positionMs)
+        AudioExtractionService.getNormalizedEnergyAt(audioEnergyEnvelope10ms, sourceTimeMs)
       } else {
         0f
       }

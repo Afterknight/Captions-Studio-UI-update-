@@ -23,6 +23,7 @@ import com.example.captionstudio.domain.model.FontRoleOverrides
 import com.example.captionstudio.domain.model.HierarchyLevel
 import com.example.captionstudio.domain.model.HookPacingTemplate
 import com.example.captionstudio.domain.model.KaraokeHighlightMode
+import com.example.captionstudio.domain.model.KeepSegment
 import com.example.captionstudio.domain.model.LayerMotionEffect
 import com.example.captionstudio.domain.model.PresetDefinition
 import com.example.captionstudio.domain.model.PreviewQualityMode
@@ -35,6 +36,7 @@ import com.example.captionstudio.domain.model.VideoMetadata
 import com.example.captionstudio.domain.model.WordTiming
 import com.example.captionstudio.engine.CompositionValidator
 import com.example.captionstudio.engine.LocalCompositionEngine
+import com.example.captionstudio.media.AudioExtractionService
 import com.example.captionstudio.media.AutoTranscribeResult
 import com.example.captionstudio.media.AutoTranscribeUiState
 import com.example.captionstudio.media.ExportUiState
@@ -55,9 +57,11 @@ import com.example.captionstudio.typography.FontRegistry
 import com.example.captionstudio.ui.components.clearVideoThumbnailCache
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +71,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class BackgroundTaskHudState(
   val isRunning: Boolean = false,
@@ -218,6 +223,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val _fontsVersion = MutableStateFlow(0)
   val fontsVersion: StateFlow<Int> = _fontsVersion.asStateFlow()
 
+  private val _audioWaveformBins = MutableStateFlow<List<Float>>(emptyList())
+  val audioWaveformBins: StateFlow<List<Float>> = _audioWaveformBins.asStateFlow()
+
+  private var audioFeatureHydrateJob: Job? = null
+
   init {
     refreshVoicePackStatuses()
   }
@@ -338,7 +348,66 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       val firstComp = loaded?.compositions?.firstOrNull()
       _selectedCompositionId.value = firstComp?.id
       _selectedElementId.value = firstComp?.elements?.firstOrNull()?.id
+      if (loaded != null) {
+        refreshAudioWaveformAndBeats(loaded)
+      } else {
+        _audioWaveformBins.value = emptyList()
+      }
     }
+  }
+
+  private fun refreshAudioWaveformAndBeats(project: CaptionProject) {
+    val uriStr = project.videoUriString
+    if (uriStr.isBlank() || !project.metadata.hasAudio) {
+      _audioWaveformBins.value = emptyList()
+      return
+    }
+    val keepSegments = project.analysisReport.keepSegments
+    val cachedRaw = AudioExtractionService.getCachedRawEnvelope(uriStr)
+    val cachedBins = AudioExtractionService.getCachedWaveformBins(uriStr)
+    if (cachedRaw != null) {
+      _audioWaveformBins.value =
+        if (keepSegments.isNotEmpty()) {
+          AudioExtractionService.resampleWaveformForKeepSegments(cachedRaw, keepSegments)
+        } else {
+          cachedBins ?: AudioExtractionService.resampleWaveformForKeepSegments(cachedRaw, emptyList())
+        }
+    } else if (cachedBins != null && keepSegments.isEmpty()) {
+      _audioWaveformBins.value = cachedBins
+    }
+
+    val needsBeats = project.analysisReport.beatTimestampsMs.isEmpty()
+    val needsEnvelope = cachedRaw == null
+    if (!needsBeats && !needsEnvelope) return
+
+    audioFeatureHydrateJob?.cancel()
+    val targetProjectId = project.id
+    audioFeatureHydrateJob =
+      viewModelScope.launch {
+        val track =
+          withContext(Dispatchers.IO) {
+            runCatching {
+              AudioExtractionService.extractAudioTrack(getApplication(), Uri.parse(uriStr))
+            }.getOrNull()
+          } ?: return@launch
+        val latest = _activeProject.value ?: return@launch
+        if (latest.id != targetProjectId) return@launch
+        val latestKeep = latest.analysisReport.keepSegments
+        _audioWaveformBins.value =
+          if (latestKeep.isNotEmpty()) {
+            AudioExtractionService.resampleWaveformForKeepSegments(track.energyEnvelope10ms, latestKeep)
+          } else {
+            track.waveformBins
+          }
+        if (latest.analysisReport.beatTimestampsMs.isEmpty() && track.beatTimestampsMs.isNotEmpty()) {
+          commitMutation(
+            latest.copy(
+              analysisReport = latest.analysisReport.copy(beatTimestampsMs = track.beatTimestampsMs)
+            ),
+            recordHistory = false,
+          )
+        }
+      }
   }
 
   suspend fun importVideoAndCreateProject(uri: Uri, title: String): String {
@@ -462,17 +531,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               progressFraction = 0.65f,
             )
           val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
-          commitMutation(
+          val updated =
             current.copy(
               videoUriString = uri.toString(),
               metadata = meta,
               analysisReport = analysis,
             )
-          )
+          commitMutation(updated)
           _statusBanner.value = analysis.summary
           _backgroundTaskState.value = BackgroundTaskHudState()
           if (meta.hasAudio && current.transcriptText.isBlank()) {
             runAutoTranscribeInternal(autoCompose = true)
+          } else {
+            refreshAudioWaveformAndBeats(updated)
           }
         } catch (_: CancellationException) {
           _statusBanner.value = "Scene analysis cancelled."
@@ -526,6 +597,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val restored = undoStack.removeLast()
     _activeProject.value = restored
     _transcribedSegments.value = VoskVideoTranscriptionService.segmentRecognizedWords(restored.wordTimings)
+    refreshAudioWaveformAndBeats(restored)
     refreshUndoFlags()
     viewModelScope.launch { projectRepo.saveProject(restored) }
   }
@@ -537,6 +609,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val restored = redoStack.removeLast()
     _activeProject.value = restored
     _transcribedSegments.value = VoskVideoTranscriptionService.segmentRecognizedWords(restored.wordTimings)
+    refreshAudioWaveformAndBeats(restored)
     refreshUndoFlags()
     viewModelScope.launch { projectRepo.saveProject(restored) }
   }
@@ -793,6 +866,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             latest.analysisReport
           }
 
+        val cachedBeats =
+          AudioExtractionService.getCachedBeatTimestamps(latest.videoUriString)
+            ?.takeIf { it.isNotEmpty() }
+            ?: latest.analysisReport.beatTimestampsMs
+        val finalAnalysis =
+          enrichedAnalysis.copy(
+            beatTimestampsMs = cachedBeats,
+            keepSegments = latest.analysisReport.keepSegments,
+            originalCompositionsBackup = latest.analysisReport.originalCompositionsBackup,
+            originalWordTimingsBackup = latest.analysisReport.originalWordTimingsBackup,
+          )
+
         val preset = PresetCatalog.findById(latest.presetId)
         val comps =
           if (autoCompose) {
@@ -801,7 +886,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 LocalCompositionEngine.generateCompositionsFromPhrases(
                   phrases = segments.map { it.words },
                   preset = preset,
-                  analysisReport = enrichedAnalysis,
+                  analysisReport = finalAnalysis,
                   fontOverrides = latest.fontOverrides,
                 )
               } else {
@@ -811,7 +896,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                   totalDurationMs =
                     max(latest.metadata.durationMs, result.wordTimings.lastOrNull()?.endMs ?: 4000L),
                   preset = preset,
-                  analysisReport = enrichedAnalysis,
+                  analysisReport = finalAnalysis,
                   fontOverrides = latest.fontOverrides,
                 )
               }
@@ -825,14 +910,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             latest.compositions
           }
 
-        commitMutation(
+        val updatedProject =
           latest.copy(
             transcriptText = result.transcript,
             wordTimings = result.wordTimings,
-            analysisReport = enrichedAnalysis,
+            analysisReport = finalAnalysis,
             compositions = comps,
           )
-        )
+        commitMutation(updatedProject)
+        refreshAudioWaveformAndBeats(updatedProject)
         _selectedCompositionId.value = comps.firstOrNull()?.id
         _selectedElementId.value = comps.firstOrNull()?.elements?.firstOrNull()?.id
         _playheadMs.value = comps.firstOrNull()?.startMs ?: 0L
@@ -1967,6 +2053,285 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _statusBanner.value = "Removed \"${removed.word}\""
   }
 
+  // --- Beat Sync & Non-Destructive Auto-Jump-Cut Silence Trimmer ---
+
+  fun mapEditedToSourceTimeMs(editedTimeMs: Long): Long {
+    val keepSegments = _activeProject.value?.analysisReport?.keepSegments.orEmpty()
+    return AudioExtractionService.mapEditedToSourceTimeMs(editedTimeMs, keepSegments)
+  }
+
+  /**
+   * 1-tap Beat Sync: snaps every caption block's entrance (`startMs`) to the nearest audio
+   * transient within ±110ms while preserving minimum duration and strictly non-overlapping order.
+   */
+  fun beatSyncCompositions() {
+    val project = _activeProject.value ?: return
+    if (project.compositions.isEmpty()) {
+      _statusBanner.value = "Generate or transcribe captions before running Beat Sync."
+      return
+    }
+    val existingBeats =
+      project.analysisReport.beatTimestampsMs.ifEmpty {
+        AudioExtractionService.getCachedBeatTimestamps(project.videoUriString).orEmpty()
+      }
+    if (existingBeats.isNotEmpty()) {
+      applyBeatSyncWithSourceBeats(project, existingBeats)
+      return
+    }
+    if (project.videoUriString.isBlank() || !project.metadata.hasAudio) {
+      _statusBanner.value = "Attach a video with audio to detect beat transients."
+      return
+    }
+
+    activeBackgroundJob?.cancel()
+    activeBackgroundJob =
+      viewModelScope.launch {
+        _isBusy.value = true
+        _backgroundTaskState.value =
+          BackgroundTaskHudState(
+            isRunning = true,
+            stepLabel = "Detecting audio beat transients...",
+            progressFraction = 0.45f,
+          )
+        try {
+          val track =
+            withContext(Dispatchers.IO) {
+              AudioExtractionService.extractAudioTrack(
+                getApplication(),
+                Uri.parse(project.videoUriString),
+              )
+            }
+          if (track == null) {
+            _statusBanner.value = "Could not decode audio track for Beat Sync."
+            return@launch
+          }
+          val latest = _activeProject.value ?: return@launch
+          val keepSegments = latest.analysisReport.keepSegments
+          _audioWaveformBins.value =
+            if (keepSegments.isNotEmpty()) {
+              AudioExtractionService.resampleWaveformForKeepSegments(track.energyEnvelope10ms, keepSegments)
+            } else {
+              track.waveformBins
+            }
+          if (track.beatTimestampsMs.isEmpty()) {
+            _statusBanner.value = "No distinct beat transients found in this audio track."
+          } else {
+            applyBeatSyncWithSourceBeats(latest, track.beatTimestampsMs)
+          }
+        } catch (_: CancellationException) {
+          _statusBanner.value = "Beat Sync cancelled."
+        } catch (_: Exception) {
+          _statusBanner.value = "Could not analyze audio track for Beat Sync."
+        } finally {
+          _isBusy.value = false
+          _backgroundTaskState.value = BackgroundTaskHudState()
+        }
+      }
+  }
+
+  private fun applyBeatSyncWithSourceBeats(
+    project: CaptionProject,
+    sourceBeatsMs: List<Long>,
+  ) {
+    val keepSegments = project.analysisReport.keepSegments
+    val editedBeats = AudioExtractionService.remapBeatsToEditedTimeline(sourceBeatsMs, keepSegments)
+    val editedDuration =
+      max(
+        AudioExtractionService.computeEditedDurationMs(keepSegments, project.metadata.durationMs),
+        project.compositions.maxOfOrNull { it.endMs } ?: 4000L,
+      )
+    val (snappedComps, snappedCount) =
+      snapCompositionsToBeats(
+        compositions = project.compositions,
+        beatTimestampsMs = editedBeats,
+        totalDurationMs = editedDuration,
+        maxSnapDeltaMs = 110L,
+        minDurationMs = 300L,
+      )
+    val updatedReport =
+      if (project.analysisReport.beatTimestampsMs == sourceBeatsMs) {
+        project.analysisReport
+      } else {
+        project.analysisReport.copy(beatTimestampsMs = sourceBeatsMs)
+      }
+    commitMutation(
+      project.copy(
+        analysisReport = updatedReport,
+        compositions = snappedComps,
+      ),
+      recordHistory = snappedCount > 0,
+    )
+    _statusBanner.value =
+      if (snappedCount > 0) {
+        "🧲 Beat Sync snapped $snappedCount caption${if (snappedCount == 1) "" else "s"} to audio transients."
+      } else {
+        "Captions are already tight with nearby beats."
+      }
+  }
+
+  /**
+   * Non-destructive Auto-Jump-Cut silence trimmer:
+   * Detects dead-air silence gaps (>420ms) with 90ms natural breath padding, creates a kept
+   * segment edit list (`KeepSegment`) for both ExoPlayer preview and Media3 Transformer export,
+   * and remaps captions/word timings while backing up the uncut timeline for 1-tap restore.
+   */
+  fun trimSilencesAutoJumpCut() {
+    val project = _activeProject.value ?: return
+    if (project.videoUriString.isBlank() || !project.metadata.hasAudio) {
+      _statusBanner.value = "Attach a video with spoken audio to auto-trim silences."
+      return
+    }
+    if (project.analysisReport.keepSegments.isNotEmpty()) {
+      _statusBanner.value = "Silences already trimmed. Use Restore Original Cut to revert."
+      return
+    }
+
+    activeBackgroundJob?.cancel()
+    activeBackgroundJob =
+      viewModelScope.launch {
+        _isBusy.value = true
+        _backgroundTaskState.value =
+          BackgroundTaskHudState(
+            isRunning = true,
+            stepLabel = "Detecting dead-air silences (>420ms)...",
+            progressFraction = 0.35f,
+          )
+        try {
+          var rawEnvelope = AudioExtractionService.getCachedRawEnvelope(project.videoUriString)
+          var extractedBeats = project.analysisReport.beatTimestampsMs
+          if (rawEnvelope == null) {
+            val track =
+              withContext(Dispatchers.IO) {
+                AudioExtractionService.extractAudioTrack(
+                  getApplication(),
+                  Uri.parse(project.videoUriString),
+                )
+              }
+            if (track == null) {
+              _statusBanner.value = "Could not decode audio track for silence trimming."
+              return@launch
+            }
+            rawEnvelope = track.energyEnvelope10ms
+            if (extractedBeats.isEmpty()) extractedBeats = track.beatTimestampsMs
+          }
+
+          val latest = _activeProject.value ?: return@launch
+          val sourceDurationMs = max(latest.metadata.durationMs, rawEnvelope.size * 10L)
+          _backgroundTaskState.value =
+            BackgroundTaskHudState(
+              isRunning = true,
+              stepLabel = "Building jump-cut timeline & remapping captions...",
+              progressFraction = 0.78f,
+            )
+
+          val keepSegments =
+            AudioExtractionService.detectKeepSegments(
+              envelope10ms = rawEnvelope,
+              totalDurationMs = sourceDurationMs,
+              minSilenceGapMs = 420L,
+              breathPadMs = 90L,
+            )
+          val editedDurationMs =
+            AudioExtractionService.computeEditedDurationMs(keepSegments, sourceDurationMs)
+          val savedMs = (sourceDurationMs - editedDurationMs).coerceAtLeast(0L)
+
+          if (keepSegments.isEmpty() || savedMs < 250L) {
+            _statusBanner.value = "No dead-air gaps over 0.42s detected — your pacing is already tight."
+            return@launch
+          }
+
+          val remappedWords =
+            AudioExtractionService.remapWordTimingsToEditedTimeline(
+              wordTimings = latest.wordTimings,
+              keepSegments = keepSegments,
+            )
+          val remappedComps =
+            AudioExtractionService.remapCompositionsToEditedTimeline(
+              compositions = latest.compositions,
+              keepSegments = keepSegments,
+            )
+
+          val updatedReport =
+            latest.analysisReport.copy(
+              beatTimestampsMs = extractedBeats,
+              keepSegments = keepSegments,
+              originalCompositionsBackup = latest.compositions,
+              originalWordTimingsBackup = latest.wordTimings,
+            )
+          val updatedProject =
+            latest.copy(
+              analysisReport = updatedReport,
+              wordTimings = remappedWords,
+              compositions = remappedComps,
+            )
+
+          commitMutation(updatedProject, recordHistory = true)
+          _transcribedSegments.value =
+            if (remappedWords.isNotEmpty()) {
+              VoskVideoTranscriptionService.segmentRecognizedWords(remappedWords)
+            } else {
+              emptyList()
+            }
+          _audioWaveformBins.value =
+            AudioExtractionService.resampleWaveformForKeepSegments(rawEnvelope, keepSegments)
+          _playheadMs.value = 0L
+          _selectedCompositionId.value = remappedComps.firstOrNull()?.id
+          _selectedElementId.value = remappedComps.firstOrNull()?.elements?.firstOrNull()?.id
+
+          val savedSec = String.format(Locale.US, "%.1f", savedMs / 1000f)
+          _statusBanner.value =
+            "✂️ Trimmed ${savedSec}s of silence (${keepSegments.size} tight jump cuts)."
+        } catch (_: CancellationException) {
+          _statusBanner.value = "Silence trimming cancelled."
+        } catch (_: Exception) {
+          _statusBanner.value = "Could not analyze audio track for silence trimming."
+        } finally {
+          _isBusy.value = false
+          _backgroundTaskState.value = BackgroundTaskHudState()
+        }
+      }
+  }
+
+  /**
+   * Non-destructively restores the original uncut video timeline, captions, and word timings.
+   */
+  fun restoreOriginalCut() {
+    val project = _activeProject.value ?: return
+    if (project.analysisReport.keepSegments.isEmpty()) return
+
+    val restoredComps =
+      project.analysisReport.originalCompositionsBackup.ifEmpty { project.compositions }
+    val restoredWords =
+      project.analysisReport.originalWordTimingsBackup.ifEmpty { project.wordTimings }
+    val restoredReport =
+      project.analysisReport.copy(
+        keepSegments = emptyList(),
+        originalCompositionsBackup = emptyList(),
+        originalWordTimingsBackup = emptyList(),
+      )
+    val restoredProject =
+      project.copy(
+        analysisReport = restoredReport,
+        compositions = restoredComps,
+        wordTimings = restoredWords,
+      )
+    commitMutation(restoredProject, recordHistory = true)
+    _transcribedSegments.value =
+      if (restoredWords.isNotEmpty()) {
+        VoskVideoTranscriptionService.segmentRecognizedWords(restoredWords)
+      } else {
+        emptyList()
+      }
+    val cachedBins = AudioExtractionService.getCachedWaveformBins(project.videoUriString)
+    if (cachedBins != null) {
+      _audioWaveformBins.value = cachedBins
+    }
+    _playheadMs.value = 0L
+    _selectedCompositionId.value = restoredComps.firstOrNull()?.id
+    _selectedElementId.value = restoredComps.firstOrNull()?.elements?.firstOrNull()?.id
+    _statusBanner.value = "Restored original uncut timeline."
+  }
+
   // --- Export (Background ForegroundService) ---
 
   fun updateExportPreferences(prefs: ExportPreferences) {
@@ -1990,9 +2355,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       outputTitle = project.title,
       faceAnchorSamples = project.analysisReport.faceAnchorSamples,
       audioEnergyEnvelope10ms =
-        com.example.captionstudio.media.AudioExtractionService.getCachedNormalizedEnvelope(
-          project.videoUriString
-        ),
+        AudioExtractionService.getCachedNormalizedEnvelope(project.videoUriString),
+      keepSegments = project.analysisReport.keepSegments,
     )
   }
 
@@ -2009,5 +2373,78 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     speechManager.stopListening()
     autoTranscriber.cancel()
     // Do NOT cancel active VideoExportForegroundService here so background exports complete reliably!
+  }
+
+  companion object {
+    /**
+     * Pure deterministic Beat Sync algorithm:
+     * Snaps each caption block's entrance (`startMs`) to the nearest audio transient within
+     * ±[maxSnapDeltaMs] while strictly preserving minimum block duration ([minDurationMs]) and
+     * non-overlapping ascending order.
+     */
+    fun snapCompositionsToBeats(
+      compositions: List<CaptionComposition>,
+      beatTimestampsMs: List<Long>,
+      totalDurationMs: Long,
+      maxSnapDeltaMs: Long = 110L,
+      minDurationMs: Long = 300L,
+    ): Pair<List<CaptionComposition>, Int> {
+      if (compositions.isEmpty() || beatTimestampsMs.isEmpty()) {
+        return compositions to 0
+      }
+      val sorted = compositions.sortedBy { it.startMs }
+      val safeTotal =
+        max(totalDurationMs, (sorted.maxOfOrNull { it.endMs } ?: 0L).coerceAtLeast(minDurationMs))
+      val result = ArrayList<CaptionComposition>(sorted.size)
+      var snappedCount = 0
+
+      for (idx in sorted.indices) {
+        val comp = sorted[idx]
+        val prevEnd = if (idx > 0) result[idx - 1].endMs else 0L
+        val nextStart = sorted.getOrNull(idx + 1)?.startMs ?: safeTotal
+        val maxAllowedEnd = max(prevEnd + minDurationMs, min(safeTotal, nextStart))
+        val maxAllowedStart = (maxAllowedEnd - minDurationMs).coerceAtLeast(prevEnd)
+
+        var bestBeat: Long? = null
+        var bestDiff = Long.MAX_VALUE
+        for (beat in beatTimestampsMs) {
+          val diff = abs(beat - comp.startMs)
+          if (diff <= maxSnapDeltaMs && diff < bestDiff) {
+            bestDiff = diff
+            bestBeat = beat
+          }
+        }
+
+        val currentStart = comp.startMs.coerceIn(prevEnd, maxAllowedStart)
+        val currentEnd = comp.endMs.coerceIn(currentStart + minDurationMs, maxAllowedEnd)
+
+        if (bestBeat != null) {
+          val candidateStart = bestBeat.coerceIn(prevEnd, maxAllowedStart)
+          if (candidateStart != comp.startMs && abs(candidateStart - bestBeat) <= 10L) {
+            val newEnd = max(currentEnd, candidateStart + minDurationMs).coerceAtMost(maxAllowedEnd)
+            val shift = candidateStart - comp.startMs
+            val shiftedWords =
+              comp.wordMappings.map { wt ->
+                val ws = (wt.startMs + shift).coerceIn(candidateStart, newEnd - 40L)
+                val we = (wt.endMs + shift).coerceIn(ws + 40L, newEnd)
+                wt.copy(startMs = ws, endMs = we)
+              }
+            result.add(
+              comp.copy(
+                startMs = candidateStart,
+                endMs = newEnd,
+                wordMappings = shiftedWords,
+              )
+            )
+            snappedCount++
+            continue
+          }
+        }
+
+        result.add(comp.copy(startMs = currentStart, endMs = currentEnd))
+      }
+
+      return result to snappedCount
+    }
   }
 }

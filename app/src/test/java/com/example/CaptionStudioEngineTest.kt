@@ -1404,4 +1404,167 @@ class CaptionStudioEngineTest {
       0.0001f,
     )
   }
+
+  @Test
+  fun `beat transient detector catches sharp energy flux spikes and enforces 180ms refractory gap`() {
+    // 200 frames = 2000ms at 10ms resolution with quiet floor + sharp transients at 400ms, 460ms (rapid hi-hat within 180ms), 1000ms, 1500ms
+    val envelope = FloatArray(200) { 0.03f }
+    fun injectTransient(frameIdx: Int, peak: Float = 0.85f) {
+      envelope[frameIdx] = peak
+      if (frameIdx + 1 < envelope.size) envelope[frameIdx + 1] = peak * 0.55f
+      if (frameIdx + 2 < envelope.size) envelope[frameIdx + 2] = peak * 0.25f
+    }
+    injectTransient(40, 0.90f) // 400ms -> should detect
+    injectTransient(46, 0.85f) // 460ms -> only 60ms after 400ms, MUST be suppressed by 180ms refractory gap
+    injectTransient(100, 0.88f) // 1000ms -> should detect
+    injectTransient(150, 0.92f) // 1500ms -> should detect
+
+    val beats = com.example.captionstudio.media.AudioExtractionService.detectBeatTransients(envelope)
+    assertTrue("Expected at least 3 distinct beat transients, got: $beats", beats.size >= 3)
+    assertTrue("Should detect beat near 400ms, got: $beats", beats.any { kotlin.math.abs(it - 400L) <= 20L })
+    assertTrue("Should detect beat near 1000ms, got: $beats", beats.any { kotlin.math.abs(it - 1000L) <= 20L })
+    assertTrue("Should detect beat near 1500ms, got: $beats", beats.any { kotlin.math.abs(it - 1500L) <= 20L })
+
+    // Verify strict 180ms refractory gap between every consecutive beat
+    for (i in 1 until beats.size) {
+      val gap = beats[i] - beats[i - 1]
+      assertTrue("Beat gap ($gap ms) must respect >=180ms refractory period ($beats)", gap >= 180L)
+    }
+  }
+
+  @Test
+  fun `magnetic timeline trim snap and 1-tap Beat Sync snap within tolerance while preventing overlaps`() {
+    val beats = listOf(400L, 1000L, 1650L, 2400L)
+
+    // 1. Magnetic ±80ms trim handle snap
+    assertEquals(1000L, com.example.captionstudio.ui.components.snapTimestampToNearestBeat(940L, beats, 80L))
+    assertEquals(1000L, com.example.captionstudio.ui.components.snapTimestampToNearestBeat(1080L, beats, 80L))
+    assertEquals(null, com.example.captionstudio.ui.components.snapTimestampToNearestBeat(1120L, beats, 80L))
+
+    // 2. 1-tap Beat Sync (±110ms entrance snap, preserves minDuration & non-overlapping order)
+    val c1 =
+      CaptionComposition(
+        id = "c1",
+        startMs = 330L, // 70ms away from 400ms -> snaps to 400ms
+        endMs = 950L,
+        originalText = "First block",
+        elements = emptyList(),
+        wordMappings = listOf(WordTiming("First", 330L, 620L), WordTiming("block", 620L, 950L)),
+      )
+    val c2 =
+      CaptionComposition(
+        id = "c2",
+        startMs = 1090L, // 90ms away from 1000ms -> snaps to 1000ms (>= c1.endMs = 950ms)
+        endMs = 1520L,
+        originalText = "Second block",
+        elements = emptyList(),
+      )
+    val c3 =
+      CaptionComposition(
+        id = "c3",
+        startMs = 1900L, // >110ms away from both 1650ms and 2400ms -> stays at 1900ms
+        endMs = 2300L,
+        originalText = "Third block",
+        elements = emptyList(),
+      )
+
+    val (snapped, count) =
+      com.example.captionstudio.ui.StudioViewModel.snapCompositionsToBeats(
+        compositions = listOf(c1, c2, c3),
+        beatTimestampsMs = beats,
+        totalDurationMs = 3000L,
+        maxSnapDeltaMs = 110L,
+        minDurationMs = 300L,
+      )
+    assertEquals(2, count)
+    assertEquals(400L, snapped[0].startMs)
+    assertEquals(400L, snapped[0].wordMappings.first().startMs)
+    assertEquals(1000L, snapped[1].startMs)
+    assertEquals(1900L, snapped[2].startMs)
+    // Strictly non-overlapping ascending order and >= 300ms duration
+    for (i in snapped.indices) {
+      assertTrue(snapped[i].endMs - snapped[i].startMs >= 300L)
+      if (i > 0) assertTrue(snapped[i].startMs >= snapped[i - 1].endMs)
+    }
+  }
+
+  @Test
+  fun `auto jump-cut detects silences over 420ms with 90ms breath padding and maps edited to source timestamps accurately`() {
+    // Construct a 4000ms audio envelope:
+    // Leading dead-air: 0ms..500ms (500ms > 420ms -> cut to 410ms with 90ms breath lead-in)
+    // Speech 1: 500ms..1200ms
+    // Dead-air gap: 1200ms..2400ms (1200ms > 420ms -> cut!)
+    // Speech 2: 2400ms..2900ms
+    // Natural pause: 2900ms..3180ms (280ms <= 420ms -> kept intact!)
+    // Speech 3: 3180ms..3450ms
+    // Trailing dead-air: 3450ms..4000ms (550ms > 420ms -> cut to 3540ms with 90ms breath tail)
+    val envelope = FloatArray(400) { idx ->
+      val ms = idx * 10L
+      when {
+        ms in 500L until 1200L -> 0.55f
+        ms in 2400L until 2900L -> 0.60f
+        ms in 3180L until 3450L -> 0.58f
+        else -> 0.008f
+      }
+    }
+
+    val keepSegments =
+      com.example.captionstudio.media.AudioExtractionService.detectKeepSegments(
+        envelope10ms = envelope,
+        totalDurationMs = 4000L,
+        minSilenceGapMs = 420L,
+        breathPadMs = 90L,
+      )
+    // Expect 2 merged keep segments:
+    // Seg 0 around [410..1290]ms (with 90ms breath padding on both sides)
+    // Seg 1 merging Speech 2 + 280ms natural pause + Speech 3 around [2310..3540]ms
+    assertEquals("Expected 2 tight jump-cut segments, got: $keepSegments", 2, keepSegments.size)
+    assertTrue("Seg 0 should start near 410ms (500-90), got ${keepSegments[0]}", keepSegments[0].sourceStartMs in 390L..440L)
+    assertTrue("Seg 0 should end near 1290ms (1200+90), got ${keepSegments[0]}", keepSegments[0].sourceEndMs in 1260L..1320L)
+    assertTrue("Seg 1 should start near 2310ms (2400-90), got ${keepSegments[1]}", keepSegments[1].sourceStartMs in 2290L..2340L)
+    assertTrue("Seg 1 should end near 3540ms (3450+90), got ${keepSegments[1]}", keepSegments[1].sourceEndMs in 3510L..3570L)
+
+    // Verify edited -> source timestamp mapping across both segments
+    val seg0Dur = keepSegments[0].durationMs
+    assertEquals(
+      keepSegments[0].sourceStartMs + 200L,
+      com.example.captionstudio.media.AudioExtractionService.mapEditedToSourceTimeMs(200L, keepSegments),
+    )
+    assertEquals(
+      keepSegments[1].sourceStartMs + 150L,
+      com.example.captionstudio.media.AudioExtractionService.mapEditedToSourceTimeMs(seg0Dur + 150L, keepSegments),
+    )
+    assertEquals(
+      (keepSegments[1].sourceStartMs + 150L) * 1000L,
+      com.example.captionstudio.media.AudioExtractionService.mapEditedToSourceTimeUs((seg0Dur + 150L) * 1000L, keepSegments),
+    )
+
+    // Verify caption & beat remapping onto edited timeline
+    val origComp1 = CaptionComposition(id = "a", startMs = 500L, endMs = 1200L, originalText = "Hello world", elements = emptyList())
+    val origComp2 = CaptionComposition(id = "b", startMs = 2400L, endMs = 2900L, originalText = "Tight cut", elements = emptyList())
+    val remapped =
+      com.example.captionstudio.media.AudioExtractionService.remapCompositionsToEditedTimeline(
+        compositions = listOf(origComp1, origComp2),
+        keepSegments = keepSegments,
+      )
+    assertEquals(2, remapped.size)
+    assertTrue("First caption should shift close to 90ms breath lead-in, got ${remapped[0].startMs}", remapped[0].startMs in 60L..120L)
+    assertTrue("Second caption should start tightly after Seg 0 ($seg0Dur), got ${remapped[1].startMs}", remapped[1].startMs in seg0Dur..(seg0Dur + 140L))
+
+    val remappedBeats =
+      com.example.captionstudio.media.AudioExtractionService.remapBeatsToEditedTimeline(
+        sourceBeatsMs = listOf(600L, 1800L, 2500L), // 1800ms lies inside cut dead-air and must be dropped
+        keepSegments = keepSegments,
+      )
+    assertEquals(2, remappedBeats.size)
+
+    // Verify backward-compatible JSON deserialization for VideoAnalysisReport
+    val legacyJson = """{"averageLuma":0.5,"recommendedAnchorY":0.74}"""
+    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    val decoded = json.decodeFromString<VideoAnalysisReport>(legacyJson)
+    assertTrue(decoded.beatTimestampsMs.isEmpty())
+    assertTrue(decoded.keepSegments.isEmpty())
+    assertTrue(decoded.originalCompositionsBackup.isEmpty())
+    assertTrue(decoded.originalWordTimingsBackup.isEmpty())
+  }
 }

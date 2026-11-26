@@ -24,6 +24,7 @@ import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
@@ -34,6 +35,7 @@ import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.ExportPreferences
 import com.example.captionstudio.domain.model.ExportResolution
 import com.example.captionstudio.domain.model.FaceAnchorSample
+import com.example.captionstudio.domain.model.KeepSegment
 import com.example.captionstudio.engine.KineticCompositionRenderer
 import com.example.captionstudio.presets.PresetCatalog
 import java.io.File
@@ -95,6 +97,7 @@ class VideoExportService(private val context: Context) {
     outputTitle: String,
     faceAnchorSamples: List<FaceAnchorSample> = emptyList(),
     audioEnergyEnvelope10ms: FloatArray? = null,
+    keepSegments: List<KeepSegment> = emptyList(),
   ) {
     if (videoUri == Uri.EMPTY) {
       _state.value = ExportUiState.Failed("Import a video before exporting an MP4 file.")
@@ -126,8 +129,13 @@ class VideoExportService(private val context: Context) {
           runCatching { tempOutFile.delete() }
           return@post
         }
+        val validKeepSegments = keepSegments.filter { it.sourceEndMs > it.sourceStartMs + 40L }
         val maskProvider =
-          if (needsSubjectMask) SubjectMaskProcessor.ExportMaskProvider(context, videoUri) else null
+          if (needsSubjectMask) {
+            SubjectMaskProcessor.ExportMaskProvider(context, videoUri, validKeepSegments)
+          } else {
+            null
+          }
         synchronized(maskLock) {
           activeMaskProvider = maskProvider
         }
@@ -147,6 +155,8 @@ class VideoExportService(private val context: Context) {
               override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
                 canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
                 val positionMs = presentationTimeUs / 1000L
+                val sourcePosMs =
+                  AudioExtractionService.mapEditedToSourceTimeMs(positionMs, validKeepSegments)
                 val activeComp = compositions.firstOrNull { positionMs in it.startMs..it.endMs }
                 val subjectMask =
                   if (activeComp?.hasBehindSubjectElements() == true) {
@@ -166,6 +176,7 @@ class VideoExportService(private val context: Context) {
                   drawSelectionGuide = false,
                   faceAnchorSamples = faceAnchorSamples,
                   audioEnergyEnvelope10ms = resolvedEnvelope,
+                  sourceTimeMs = sourcePosMs,
                 )
                 if (exportPrefs.showWatermark) {
                   renderer.drawWatermark(canvas, width, height)
@@ -210,11 +221,39 @@ class VideoExportService(private val context: Context) {
           )
           videoEffects.add(OverlayEffect(listOf(canvasOverlay)))
 
-          val mediaItem = MediaItem.fromUri(videoUri)
-          val editedItem =
-            EditedMediaItem.Builder(mediaItem)
-              .setEffects(Effects(emptyList(), videoEffects))
-              .build()
+          val compositionEffects = Effects(emptyList(), videoEffects)
+          val media3Composition =
+            if (validKeepSegments.isNotEmpty()) {
+              val clippedItems =
+                validKeepSegments.map { seg ->
+                  val clippedMedia =
+                    MediaItem.Builder()
+                      .setUri(videoUri)
+                      .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                          .setStartPositionMs(seg.sourceStartMs.coerceAtLeast(0L))
+                          .setEndPositionMs(seg.sourceEndMs)
+                          .build()
+                      )
+                      .build()
+                  EditedMediaItem.Builder(clippedMedia).build()
+                }
+              val sequence = EditedMediaItemSequence.Builder(clippedItems).build()
+              Composition.Builder(listOf(sequence))
+                .setEffects(compositionEffects)
+                .build()
+            } else {
+              null
+            }
+
+          val singleEditedItem =
+            if (media3Composition == null) {
+              EditedMediaItem.Builder(MediaItem.fromUri(videoUri))
+                .setEffects(compositionEffects)
+                .build()
+            } else {
+              null
+            }
 
           val encoderSettings =
             VideoEncoderSettings.Builder()
@@ -261,7 +300,11 @@ class VideoExportService(private val context: Context) {
               .build()
 
           activeTransformer = transformer
-          transformer.start(editedItem, tempOutFile.absolutePath)
+          if (media3Composition != null) {
+            transformer.start(media3Composition, tempOutFile.absolutePath)
+          } else {
+            transformer.start(singleEditedItem!!, tempOutFile.absolutePath)
+          }
           startedSuccessfully = true
           startProgressPolling(transformer, needsSubjectMask)
         } catch (e: Exception) {

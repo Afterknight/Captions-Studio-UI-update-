@@ -953,7 +953,11 @@ object SubjectMaskProcessor {
    * - Ramps to full 30fps (33ms cadence) with zero temporal lag during fast hand/head motion.
    * - Reuses internal RGB/output scratch buffers to eliminate GC pauses during long exports.
    */
-  class ExportMaskProvider(context: Context, videoUri: Uri) : AutoCloseable {
+  class ExportMaskProvider(
+    context: Context,
+    videoUri: Uri,
+    private val keepSegments: List<com.example.captionstudio.domain.model.KeepSegment> = emptyList(),
+  ) : AutoCloseable {
     private val decodeLock = Any()
     private val sequentialDecoder = SequentialVideoFrameDecoder(context, videoUri, MASK_MAX_DIM_EXPORT_HQ)
     private var fallbackRetriever: MediaMetadataRetriever? = null
@@ -988,17 +992,21 @@ object SubjectMaskProcessor {
     fun getMaskAtTimeUs(presentationTimeUs: Long): Bitmap? =
       synchronized(decodeLock) {
         if (!isOpen) return null
-        val clampedUs = presentationTimeUs.coerceAtLeast(0L)
-        val bucket = clampedUs / 33_333L // Full 30fps bucket resolution
+        val sourceUs =
+          AudioExtractionService.mapEditedToSourceTimeUs(
+            editedTimeUs = presentationTimeUs.coerceAtLeast(0L),
+            keepSegments = keepSegments,
+          )
+        val bucket = sourceUs / 33_333L // Full 30fps bucket resolution on source timeline
         exportCache.get(bucket)?.let { return it }
 
-        val (frameBmp, shouldRecycleFrame) = decodeScaledFrame(clampedUs)
+        val (frameBmp, shouldRecycleFrame) = decodeScaledFrame(sourceUs)
         if (frameBmp == null) return lastMaskBitmap
 
         try {
           val fingerprint = computeFrameFingerprint16x16(frameBmp)
 
-          val deltaUs = if (lastSampledUs >= 0L) abs(clampedUs - lastSampledUs) else Long.MAX_VALUE
+          val deltaUs = if (lastSampledUs >= 0L) abs(sourceUs - lastSampledUs) else Long.MAX_VALUE
           val motionSad =
             if (lastFingerprint != null && deltaUs <= 200_000L) {
               frameDifferenceSad(lastFingerprint!!, fingerprint)
@@ -1048,7 +1056,7 @@ object SubjectMaskProcessor {
             )
 
           lastFingerprint = fingerprint
-          lastSampledUs = clampedUs
+          lastSampledUs = sourceUs
 
           if (refined != null) {
             lastProbs = refined.probs
