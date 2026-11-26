@@ -49,7 +49,19 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      val keystoreFileEnv = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+      val keystorePasswordEnv = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+      val keyAliasEnv = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
+      val keyPasswordEnv = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+
+      signingConfig = if (!keystoreFileEnv.isNullOrBlank() && !keystorePasswordEnv.isNullOrBlank() && !keyPasswordEnv.isNullOrBlank()) {
+        if (!keyAliasEnv.isNullOrBlank()) {
+          signingConfigs.getByName("release").keyAlias = keyAliasEnv
+        }
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.getByName("debugConfig")
+      }
     }
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in

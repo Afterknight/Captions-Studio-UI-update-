@@ -1,18 +1,10 @@
-name: Build & Publish Release APK (Captions Studio v-beta-0.5)
+name: Build & Publish Release APK (Caption Studio v-beta-0.9)
 
 on:
   push:
     branches:
       - main
-      - master
-    tags:
-      - 'v*'
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'GitHub Release tag'
-        required: false
-        default: 'v-beta-0.5'
 
 permissions:
   contents: write
@@ -25,11 +17,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: '21'
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Accept Android SDK licenses
         run: |
@@ -40,76 +32,65 @@ jobs:
             yes | "$SDKMANAGER" --licenses > /dev/null || true
           fi
 
-      - name: Prepare release signing keystore
+      - name: Decode optional release keystore secret
         env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          KEYSTORE_FILE="${{ github.workspace }}/release-upload.jks"
-          rm -f "$KEYSTORE_FILE"
-
-          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$RELEASE_STORE_PASSWORD" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
-            printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KEYSTORE_FILE"
-            STORE_PASS="$RELEASE_STORE_PASSWORD"
-            KEY_PASS="$RELEASE_KEY_PASSWORD"
-            echo "Using repository release signing keystore secret."
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            KS_FILE="${{ github.workspace }}/release-keystore.jks"
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KS_FILE"
+            echo "KEYSTORE_FILE=$KS_FILE" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${KEY_ALIAS:-upload}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "Using repository release keystore secret."
           else
-            echo "Release signing secrets not set; generating a valid PKCS12 release keystore (alias: upload)..."
-            STORE_PASS="captions-studio-beta-0"
-            KEY_PASS="captions-studio-beta-0"
-            keytool -genkeypair -v \
-              -keystore "$KEYSTORE_FILE" \
-              -storetype PKCS12 \
-              -storepass "$STORE_PASS" \
-              -alias upload \
-              -keypass "$KEY_PASS" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Captions Studio v-beta-0.5,O=Captions Studio,C=US"
+            echo "Release keystore secrets not set; Gradle will fall back to debug signing so the APK installs cleanly on devices."
           fi
 
-          echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> "$GITHUB_ENV"
-          echo "STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
-          echo "KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
-
-      - name: Set up Gradle 9.3.1
+      - name: Set up Gradle & cache dependencies
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 9.3.1
+          gradle-version: '9.3.1'
 
-      - name: Build signed Release APK via github-release.gradle.kts
-        run: gradle --init-script github-release.gradle.kts :app:buildGitHubReleaseApk --no-daemon
+      - name: Build installable Release APK
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --init-script github-release.gradle.kts assembleRelease --no-daemon
+          else
+            gradle --init-script github-release.gradle.kts assembleRelease --no-daemon
+          fi
+
+      - name: Rename signed Release APK
+        run: |
+          RELEASE_DIR="app/build/outputs/apk/release"
+          SIGNED_APK="$RELEASE_DIR/app-release.apk"
+          TARGET_APK="$RELEASE_DIR/CaptionStudio-v-beta-0.9.apk"
+          if [ ! -f "$SIGNED_APK" ]; then
+            echo "Expected signed release APK at $SIGNED_APK was not found. Listing $RELEASE_DIR:"
+            ls -la "$RELEASE_DIR" || true
+            exit 1
+          fi
+          cp -f "$SIGNED_APK" "$TARGET_APK"
+          ls -lh "$TARGET_APK"
 
       - name: Upload Release APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Captions-Studio-v-beta-0.5-release-apk
-          path: |
-            release-dist/Captions-Studio-v-beta-0.5-release.apk
-            release-dist/Captions-Studio-v-beta-0.5-release.apk.sha256
+          name: CaptionStudio-v-beta-0.9
+          path: app/build/outputs/apk/release/CaptionStudio-v-beta-0.9.apk
           if-no-files-found: error
 
-      - name: Determine release tag
-        id: release_meta
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          elif [ -n "${{ github.event.inputs.release_tag }}" ]; then
-            TAG="${{ github.event.inputs.release_tag }}"
-          else
-            TAG="v-beta-0.5"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Publish GitHub Release with APK
-        uses: softprops/action-gh-release@v2
+      - name: Publish APK to GitHub Releases (v-beta-0.9)
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          name: Captions Studio ${{ steps.release_meta.outputs.tag }}
+          tag_name: v-beta-0.9
+          name: Caption Studio v-beta-0.9
           prerelease: true
+          make_latest: true
           generate_release_notes: true
-          files: |
-            release-dist/Captions-Studio-v-beta-0.5-release.apk
-            release-dist/Captions-Studio-v-beta-0.5-release.apk.sha256
+          files: app/build/outputs/apk/release/CaptionStudio-v-beta-0.9.apk
