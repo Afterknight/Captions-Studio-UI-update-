@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionProject
@@ -205,6 +206,10 @@ fun EditorScreen(
   onApplyPreset: (String) -> Unit = {},
   onApplyPairing: (CuratedFontPairing) -> Unit = {},
   speechLanguageTag: String = "en-US",
+  asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
+  isUnder4GbRam: Boolean = false,
+  onSetAsrEnginePreference: (AsrEnginePreference) -> Unit = {},
+  onSetSpeechLanguageTag: (String) -> Unit = {},
   voicePackStatuses: List<OfflineVoicePackStatus> = emptyList(),
   onDownloadVoicePackForLanguage: (String) -> Unit = {},
   isCreatorMode: Boolean = true,
@@ -680,6 +685,11 @@ fun EditorScreen(
               customPresets = customPresets,
               safeZonePlatform = safeZonePlatform,
               isBusy = isBusy,
+              asrEnginePreference = asrEnginePreference,
+              isUnder4GbRam = isUnder4GbRam,
+              speechLanguageTag = speechLanguageTag,
+              onSetAsrEnginePreference = onSetAsrEnginePreference,
+              onSetSpeechLanguageTag = onSetSpeechLanguageTag,
               onApplyPreset = onApplyPreset,
               onScaleAllText = onScaleAllText,
               onSetAllHeight = onSetAllHeight,
@@ -909,6 +919,9 @@ fun EditorScreen(
                   onApplyAnimation = onApplyAnimation,
                   waveformBins = effectiveWaveformBins,
                   beatTimestampsMs = displayedBeats,
+                  asrEnginePreference = asrEnginePreference,
+                  isUnder4GbRam = isUnder4GbRam,
+                  onSetAsrEnginePreference = onSetAsrEnginePreference,
                 )
               }
             }

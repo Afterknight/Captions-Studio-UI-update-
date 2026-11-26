@@ -47,6 +47,7 @@ mlkitTextRecognition = "16.0.1"
 mlkitFaceDetection = "16.1.7"
 voskAndroid = "0.3.47"
 jna = "5.13.0"
+whisperAndroid = "1.0.0"
 
 
 [libraries]
@@ -112,6 +113,7 @@ mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition"
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFaceDetection" }
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "voskAndroid" }
 jna-aar = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+whisper-android = { group = "dev.ffmpegkit-maintained", name = "whisper-android", version.ref = "whisperAndroid" }
 
 
 [plugins]

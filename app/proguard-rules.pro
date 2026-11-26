@@ -4,8 +4,8 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Kotlinx Serialization (Navigation routes, domain models, style deep links)
--keepattributes *Annotation*, InnerClasses
+# Kotlinx Serialization & Gson (Navigation routes, domain models, style deep links)
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
 -dontnote kotlinx.serialization.AnnotationsKt
 -keepclassmembers class kotlinx.serialization.json.** {
     *** Companion;
@@ -21,6 +21,16 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+# Preserve all Stage 2 & Stage 3 Domain, Data, and Preset Models + Enums under R8 Minification
+-keep class com.example.captionstudio.domain.model.** { *; }
+-keep class com.example.captionstudio.data.** { *; }
+-keep class com.example.captionstudio.presets.** { *; }
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+    *;
+}
+
 # Room Database Entities & DAOs
 -keep class * extends androidx.room.RoomDatabase
 -keep @androidx.room.Entity class * { *; }
@@ -33,6 +43,10 @@
 -keepclassmembers class * extends com.sun.jna.** { *; }
 -dontwarn com.sun.jna.**
 -dontwarn java.awt.**
+
+# Whisper.cpp Android Offline ASR JNI Bindings (CRITICAL — prevents UnsatisfiedLinkError in R8)
+-keep class dev.ffmpegkit.whisper.** { *; }
+-dontwarn dev.ffmpegkit.whisper.**
 
 # ML Kit Selfie Segmentation & On-Device Text Recognition
 -keep class com.google.mlkit.** { *; }

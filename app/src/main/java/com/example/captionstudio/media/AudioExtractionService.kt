@@ -880,6 +880,78 @@ object AudioExtractionService {
     return out.toByteArray()
   }
 
+  /**
+   * Converts a slice of 16kHz 16-bit mono PCM into normalized float PCM in [-1f, 1f] for Whisper,
+   * gently boosting quiet microphone recordings without clipping while preserving noise floor.
+   */
+  fun pcm16kToNormalizedFloat(
+    pcm16k: ShortArray,
+    startIdx: Int = 0,
+    endIdx: Int = pcm16k.size,
+  ): FloatArray {
+    val safeStart = startIdx.coerceIn(0, pcm16k.size)
+    val safeEnd = endIdx.coerceIn(safeStart, pcm16k.size)
+    val count = safeEnd - safeStart
+    if (count <= 0) return FloatArray(0)
+
+    var peakAbs = 0f
+    for (i in safeStart until safeEnd) {
+      val a = abs(pcm16k[i].toFloat()) / 32768f
+      if (a > peakAbs) peakAbs = a
+    }
+
+    val gain =
+      if (peakAbs in 0.006f..0.22f) {
+        min(5.5f, 0.72f / peakAbs)
+      } else {
+        1.0f
+      }
+
+    return FloatArray(count) { idx ->
+      ((pcm16k[safeStart + idx].toFloat() / 32768f) * gain).coerceIn(-1f, 1f)
+    }
+  }
+
+  /**
+   * Encodes normalized 16kHz mono float PCM [-1f, 1f] into a standard 44-byte RIFF/WAVE
+   * 16-bit mono PCM byte array consumable by Whisper's native decoder.
+   */
+  fun encodeFloatPcmToWavBytes(
+    floatPcm16k: FloatArray,
+    sampleRateHz: Int = TARGET_SAMPLE_RATE,
+  ): ByteArray {
+    val sampleCount = floatPcm16k.size
+    val dataBytes = sampleCount * 2
+    val out = ByteArrayOutputStream(44 + dataBytes)
+    val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+    header.put("RIFF".toByteArray(Charsets.US_ASCII))
+    header.putInt(36 + dataBytes)
+    header.put("WAVE".toByteArray(Charsets.US_ASCII))
+    header.put("fmt ".toByteArray(Charsets.US_ASCII))
+    header.putInt(16) // PCM chunk size
+    header.putShort(1) // PCM format
+    header.putShort(1) // Mono
+    header.putInt(sampleRateHz)
+    header.putInt(sampleRateHz * 2) // Byte rate
+    header.putShort(2) // Block align
+    header.putShort(16) // Bits per sample
+    header.put("data".toByteArray(Charsets.US_ASCII))
+    header.putInt(dataBytes)
+    out.write(header.array())
+
+    val dataBuf = ByteBuffer.allocate(dataBytes).order(ByteOrder.LITTLE_ENDIAN)
+    for (i in 0 until sampleCount) {
+      val sample =
+        (floatPcm16k[i].coerceIn(-1f, 1f) * 32767f)
+          .toInt()
+          .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+          .toShort()
+      dataBuf.putShort(sample)
+    }
+    out.write(dataBuf.array())
+    return out.toByteArray()
+  }
+
   private fun downsampleWaveform(envelope: FloatArray, binCount: Int): List<Float> {
     if (envelope.isEmpty() || binCount <= 0) return emptyList()
     val maxVal = envelope.maxOrNull()?.coerceAtLeast(0.01f) ?: 1f

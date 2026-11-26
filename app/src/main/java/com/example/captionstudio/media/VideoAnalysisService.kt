@@ -1,5 +1,6 @@
 package com.example.captionstudio.media
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -23,11 +24,142 @@ import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 object VideoAnalysisService {
+
+  const val LOW_RAM_ANALYSIS_THRESHOLD_BYTES: Long = 2_500_000_000L
+  const val LOW_RAM_MAX_FRAMES: Int = 6
+  const val NORMAL_RAM_MAX_FRAMES: Int = 16
+  const val LOW_RAM_MAX_DIMENSION_PX: Int = 256
+  const val NORMAL_RAM_MAX_DIMENSION_PX: Int = 384
+
+  /**
+   * Pure memory classification helper for frame-analysis budgeting.
+   * Treats Android Go / low-RAM devices OR devices with < 2.5 GB total RAM (2 GB phones)
+   * as low-RAM analysis targets.
+   */
+  internal fun isLowRamAnalysisMemory(isLowRamDevice: Boolean, totalMemBytes: Long): Boolean =
+    isLowRamDevice || (totalMemBytes in 1L until LOW_RAM_ANALYSIS_THRESHOLD_BYTES)
+
+  fun isLowRamAnalysisDevice(context: Context): Boolean =
+    try {
+      val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+      if (activityManager == null) {
+        false
+      } else {
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        isLowRamAnalysisMemory(activityManager.isLowRamDevice, memoryInfo.totalMem)
+      }
+    } catch (_: Throwable) {
+      false
+    }
+
+  /**
+   * Computes deduplicated frame timestamps for visual analysis.
+   * On low-RAM (<= 2 GB) devices, strictly caps sampled frames to [LOW_RAM_MAX_FRAMES] (6)
+   * evenly distributed across the timeline to prevent OOM during post-transcription analysis.
+   */
+  internal fun buildAnalysisSampleTimestamps(
+    durationMs: Long,
+    targetTimestampsMs: List<Long>,
+    isLowRam: Boolean,
+  ): List<Long> {
+    if (durationMs <= 0L) return emptyList()
+    val maxClampedMs = (durationMs - 80L).coerceAtLeast(80L)
+    if (isLowRam) {
+      val count =
+        when {
+          durationMs < 2_500L -> min(3, LOW_RAM_MAX_FRAMES)
+          durationMs < 6_000L -> min(4, LOW_RAM_MAX_FRAMES)
+          else -> LOW_RAM_MAX_FRAMES
+        }
+      val stepMs = (durationMs / (count + 1)).coerceAtLeast(220L)
+      return (1..count)
+        .map { i -> (stepMs * i).coerceIn(80L, maxClampedMs) }
+        .distinct()
+        .sorted()
+        .take(LOW_RAM_MAX_FRAMES)
+    }
+
+    return buildList {
+      val uniformCount =
+        when {
+          durationMs > 25_000L -> 14
+          durationMs > 10_000L -> 12
+          else -> 10
+        }
+      val stepMs = (durationMs / (uniformCount + 1)).coerceAtLeast(220L)
+      for (i in 1..uniformCount) {
+        add((stepMs * i).coerceIn(80L, maxClampedMs))
+      }
+      targetTimestampsMs.forEach { ts ->
+        val clamped = ts.coerceIn(80L, maxClampedMs)
+        if (none { abs(it - clamped) < 350L }) {
+          add(clamped)
+        }
+      }
+    }.sorted().take(NORMAL_RAM_MAX_FRAMES)
+  }
+
+  private fun downscaleBitmapPreserveAspect(src: Bitmap, maxDimensionPx: Int): Bitmap {
+    val w = src.width.coerceAtLeast(1)
+    val h = src.height.coerceAtLeast(1)
+    val longest = max(w, h)
+    if (longest <= maxDimensionPx) return src
+    val scale = maxDimensionPx.toFloat() / longest.toFloat()
+    val targetW = max(2, (w * scale).toInt())
+    val targetH = max(2, (h * scale).toInt())
+    return Bitmap.createScaledBitmap(src, targetW, targetH, true)
+  }
+
+  private fun decodeDownscaledFrame(
+    retriever: MediaMetadataRetriever,
+    timeUs: Long,
+    maxDimensionPx: Int,
+  ): Bitmap? {
+    val decoded =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        retriever.getScaledFrameAtTime(
+          timeUs,
+          MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+          maxDimensionPx,
+          maxDimensionPx,
+        )
+      } else {
+        val full = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return null
+        try {
+          val scaled = downscaleBitmapPreserveAspect(full, maxDimensionPx)
+          if (scaled !== full) {
+            runCatching { full.recycle() }
+          }
+          scaled
+        } catch (t: Throwable) {
+          if (!full.isRecycled) runCatching { full.recycle() }
+          throw t
+        }
+      } ?: return null
+
+    // Double-check bounds in case an OEM MediaMetadataRetriever ignores scaled dimensions
+    return if (max(decoded.width, decoded.height) > maxDimensionPx) {
+      try {
+        val bounded = downscaleBitmapPreserveAspect(decoded, maxDimensionPx)
+        if (bounded !== decoded) {
+          runCatching { decoded.recycle() }
+        }
+        bounded
+      } catch (t: Throwable) {
+        if (!decoded.isRecycled) runCatching { decoded.recycle() }
+        throw t
+      }
+    } else {
+      decoded
+    }
+  }
 
   private val mlKitFaceDetector: MlKitFaceDetector by lazy {
     val options =
@@ -158,189 +290,201 @@ object VideoAnalysisService {
       val frameSamples = mutableListOf<FrameSampleVisual>()
       var splitSeamHits = 0
 
-      // Build deduplicated sample timestamps (uniformly across timeline + optional caption midpoints)
+      val isLowRam = isLowRamAnalysisDevice(context)
+      val maxDimPx = if (isLowRam) LOW_RAM_MAX_DIMENSION_PX else NORMAL_RAM_MAX_DIMENSION_PX
       val sampleTimesMs =
-        buildList {
-          val uniformCount =
-            when {
-              metadata.durationMs > 25_000L -> 18
-              metadata.durationMs > 10_000L -> 14
-              else -> 12
-            }
-          val stepMs = (metadata.durationMs / (uniformCount + 1)).coerceAtLeast(220L)
-          for (i in 1..uniformCount) {
-            add((stepMs * i).coerceIn(80L, (metadata.durationMs - 80L).coerceAtLeast(80L)))
-          }
-          targetTimestampsMs.forEach { ts ->
-            val clamped = ts.coerceIn(80L, (metadata.durationMs - 80L).coerceAtLeast(80L))
-            if (none { abs(it - clamped) < 350L }) {
-              add(clamped)
-            }
-          }
-        }.sorted().take(24)
+        buildAnalysisSampleTimestamps(
+          durationMs = metadata.durationMs,
+          targetTimestampsMs = targetTimestampsMs,
+          isLowRam = isLowRam,
+        )
 
       try {
         retriever.setDataSource(context, videoUri)
 
         for (tsMs in sampleTimesMs) {
-          val timeUs = tsMs * 1000L
-          val raw =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-              retriever.getScaledFrameAtTime(
-                timeUs,
-                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                288,
-                512,
-              )
-            } else {
-              retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let {
-                val scale = 288f / max(1, it.width)
-                val scaled =
-                  Bitmap.createScaledBitmap(
-                    it,
-                    max(2, (it.width * scale).toInt()),
-                    max(2, (it.height * scale).toInt()),
-                    true,
+          var raw: Bitmap? = null
+          var rgb565: Bitmap? = null
+          var detectorBitmap: Bitmap? = null
+          try {
+            val timeUs = tsMs * 1000L
+            raw = decodeDownscaledFrame(retriever, timeUs, maxDimPx) ?: continue
+            val frameBmp = raw
+
+            val fingerprint = SubjectMaskProcessor.computeFrameFingerprint16x16(frameBmp)
+            val subjectMetrics =
+              try {
+                SubjectMaskProcessor.analyzeSubjectMetrics(frameBmp)
+              } catch (_: Throwable) {
+                SubjectMaskProcessor.SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
+              }
+
+            // Ensure even dimensions for Android FaceDetector
+            val evenW = (frameBmp.width / 2) * 2
+            val evenH = (frameBmp.height / 2) * 2
+            if (evenW < 2 || evenH < 2) continue
+
+            rgb565 = frameBmp.copy(Bitmap.Config.RGB_565, false)
+            detectorBitmap =
+              if (rgb565 != null) {
+                if (rgb565.width != evenW || rgb565.height != evenH) {
+                  Bitmap.createBitmap(rgb565, 0, 0, evenW, evenH)
+                } else {
+                  rgb565
+                }
+              } else {
+                null
+              }
+
+            // 1. ML Kit FaceDetector (primary: exact boundingBox + headEulerAngleZ roll angle for parallax)
+            val frameFaces = mutableListOf<NormalizedRect>()
+            var hasBottomHalfFace = false
+            val rawW = frameBmp.width.coerceAtLeast(1).toFloat()
+            val rawH = frameBmp.height.coerceAtLeast(1).toFloat()
+            val mlFaces =
+              try {
+                detectMlKitFaces(frameBmp)
+              } catch (ce: CancellationException) {
+                throw ce
+              } catch (_: Throwable) {
+                emptyList()
+              }
+
+            if (mlFaces.isNotEmpty()) {
+              var primaryFace: Face? = null
+              var primaryArea = -1
+              for (face in mlFaces) {
+                val b = face.boundingBox
+                val area = b.width() * b.height()
+                if (area > primaryArea) {
+                  primaryArea = area
+                  primaryFace = face
+                }
+                val rect =
+                  NormalizedRect(
+                    left = (b.left / rawW).coerceIn(0f, 1f),
+                    top = (b.top / rawH).coerceIn(0f, 1f),
+                    right = (b.right / rawW).coerceIn(0f, 1f),
+                    bottom = (b.bottom / rawH).coerceIn(0f, 1f),
                   )
-                if (scaled !== it) it.recycle()
-                scaled
+                frameFaces.add(rect)
+                faceRectsAll.add(rect)
+                if (rect.top > 0.38f) hasBottomHalfFace = true
               }
-            } ?: continue
-
-          val fingerprint = SubjectMaskProcessor.computeFrameFingerprint16x16(raw)
-          val subjectMetrics = SubjectMaskProcessor.analyzeSubjectMetrics(raw)
-
-          // Ensure even width for Android FaceDetector
-          val evenW = (raw.width / 2) * 2
-          val evenH = (raw.height / 2) * 2
-          val rgb565 = raw.copy(Bitmap.Config.RGB_565, false)
-          val detectorBitmap =
-            if (rgb565.width != evenW || rgb565.height != evenH) {
-              Bitmap.createBitmap(rgb565, 0, 0, evenW, evenH).also { rgb565.recycle() }
-            } else {
-              rgb565
-            }
-
-          // 1. ML Kit FaceDetector (primary: exact boundingBox + headEulerAngleZ roll angle for parallax)
-          val frameFaces = mutableListOf<NormalizedRect>()
-          var hasBottomHalfFace = false
-          val rawW = raw.width.coerceAtLeast(1).toFloat()
-          val rawH = raw.height.coerceAtLeast(1).toFloat()
-          val mlFaces = detectMlKitFaces(raw)
-          if (mlFaces.isNotEmpty()) {
-            var primaryFace: Face? = null
-            var primaryArea = -1
-            for (face in mlFaces) {
-              val b = face.boundingBox
-              val area = b.width() * b.height()
-              if (area > primaryArea) {
-                primaryArea = area
-                primaryFace = face
-              }
-              val rect =
-                NormalizedRect(
-                  left = (b.left / rawW).coerceIn(0f, 1f),
-                  top = (b.top / rawH).coerceIn(0f, 1f),
-                  right = (b.right / rawW).coerceIn(0f, 1f),
-                  bottom = (b.bottom / rawH).coerceIn(0f, 1f),
-                )
-              frameFaces.add(rect)
-              faceRectsAll.add(rect)
-              if (rect.top > 0.38f) hasBottomHalfFace = true
-            }
-            primaryFace?.let { pf ->
-              val b = pf.boundingBox
-              val cx = (b.exactCenterX() / rawW).coerceIn(0f, 1f)
-              val cy = (b.exactCenterY() / rawH).coerceIn(0f, 1f)
-              val rollZ = pf.headEulerAngleZ.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
-              faceAnchorSamples.add(
-                FaceAnchorSample(
-                  timestampMs = tsMs,
-                  centerX = cx,
-                  centerY = cy,
-                  headEulerAngleZ = rollZ,
-                )
-              )
-            }
-          } else {
-            // Fallback to Android FaceDetector if ML Kit finds no frontal face on this frame
-            val faces = arrayOfNulls<FaceDetector.Face>(3)
-            val found = FaceDetector(detectorBitmap.width, detectorBitmap.height, 3).findFaces(detectorBitmap, faces)
-            var fallbackAddedAnchor = false
-            for (f in 0 until found) {
-              val face = faces[f] ?: continue
-              val mid = android.graphics.PointF()
-              face.getMidPoint(mid)
-              val eyeDist = face.eyesDistance().coerceAtLeast(10f)
-              val halfW = (eyeDist * 1.75f) / detectorBitmap.width
-              val halfH = (eyeDist * 2.35f) / detectorBitmap.height
-              val cx = (mid.x / detectorBitmap.width).coerceIn(0f, 1f)
-              val cy = (mid.y / detectorBitmap.height).coerceIn(0f, 1f)
-              val rect =
-                NormalizedRect(
-                  left = (cx - halfW).coerceIn(0f, 1f),
-                  top = (cy - halfH).coerceIn(0f, 1f),
-                  right = (cx + halfW).coerceIn(0f, 1f),
-                  bottom = (cy + halfH).coerceIn(0f, 1f),
-                )
-              frameFaces.add(rect)
-              faceRectsAll.add(rect)
-              if (rect.top > 0.38f) hasBottomHalfFace = true
-              if (!fallbackAddedAnchor) {
+              primaryFace?.let { pf ->
+                val b = pf.boundingBox
+                val cx = (b.exactCenterX() / rawW).coerceIn(0f, 1f)
+                val cy = (b.exactCenterY() / rawH).coerceIn(0f, 1f)
+                val rollZ = pf.headEulerAngleZ.takeIf { it.isFinite() }?.coerceIn(-45f, 45f) ?: 0f
                 faceAnchorSamples.add(
                   FaceAnchorSample(
                     timestampMs = tsMs,
                     centerX = cx,
                     centerY = cy,
-                    headEulerAngleZ = 0f,
+                    headEulerAngleZ = rollZ,
                   )
                 )
-                fallbackAddedAnchor = true
+              }
+            } else if (detectorBitmap != null && !detectorBitmap.isRecycled) {
+              // Fallback to Android FaceDetector if ML Kit finds no frontal face on this frame
+              try {
+                val faces = arrayOfNulls<FaceDetector.Face>(3)
+                val found =
+                  FaceDetector(detectorBitmap.width, detectorBitmap.height, 3)
+                    .findFaces(detectorBitmap, faces)
+                var fallbackAddedAnchor = false
+                for (f in 0 until found) {
+                  val face = faces[f] ?: continue
+                  val mid = android.graphics.PointF()
+                  face.getMidPoint(mid)
+                  val eyeDist = face.eyesDistance().coerceAtLeast(10f)
+                  val halfW = (eyeDist * 1.75f) / detectorBitmap.width
+                  val halfH = (eyeDist * 2.35f) / detectorBitmap.height
+                  val cx = (mid.x / detectorBitmap.width).coerceIn(0f, 1f)
+                  val cy = (mid.y / detectorBitmap.height).coerceIn(0f, 1f)
+                  val rect =
+                    NormalizedRect(
+                      left = (cx - halfW).coerceIn(0f, 1f),
+                      top = (cy - halfH).coerceIn(0f, 1f),
+                      right = (cx + halfW).coerceIn(0f, 1f),
+                      bottom = (cy + halfH).coerceIn(0f, 1f),
+                    )
+                  frameFaces.add(rect)
+                  faceRectsAll.add(rect)
+                  if (rect.top > 0.38f) hasBottomHalfFace = true
+                  if (!fallbackAddedAnchor) {
+                    faceAnchorSamples.add(
+                      FaceAnchorSample(
+                        timestampMs = tsMs,
+                        centerX = cx,
+                        centerY = cy,
+                        headEulerAngleZ = 0f,
+                      )
+                    )
+                    fallbackAddedAnchor = true
+                  }
+                }
+              } catch (_: Throwable) {
+                // Swallow FaceDetector native/OOM failures per frame so analysis continues safely
               }
             }
+
+            val mergedHeadVeto = mergeHeadVetoRects(frameFaces, subjectMetrics.headVetoRect)
+
+            // 2. Per-zone edge variance (clutter), mean luminance, histogram, and split-seam check
+            val pixelSource = detectorBitmap ?: frameBmp
+            val w = pixelSource.width
+            val h = pixelSource.height
+            val pixels = IntArray(w * h)
+            pixelSource.getPixels(pixels, 0, w, 0, 0, w, h)
+
+            val (hist, isSplitFrame, zoneMetrics) =
+              analyzeFramePixelsForZones(
+                pixels = pixels,
+                width = w,
+                height = h,
+                headVetoRect = mergedHeadVeto,
+                subjectBbox = subjectMetrics.boundingBox,
+                subjectCentroidX = subjectMetrics.centroidX,
+                subjectCoverage = subjectMetrics.coverageFraction,
+                hasBottomHalfFace = hasBottomHalfFace,
+              )
+            if (isSplitFrame) splitSeamHits++
+
+            frameSamples.add(
+              FrameSampleVisual(
+                timestampMs = tsMs,
+                fingerprint = fingerprint,
+                hist = hist,
+                headVetoRect = mergedHeadVeto,
+                faceRects = frameFaces,
+                subjectCentroidX = subjectMetrics.centroidX,
+                subjectCentroidY = subjectMetrics.centroidY,
+                subjectCoverage = subjectMetrics.coverageFraction,
+                isSplitScreen = isSplitFrame,
+                zoneMetrics = zoneMetrics,
+              )
+            )
+          } catch (ce: CancellationException) {
+            throw ce
+          } catch (_: Throwable) {
+            // Skip frame safely on OutOfMemoryError or codec error without crashing
+          } finally {
+            if (detectorBitmap != null && detectorBitmap !== rgb565 && detectorBitmap !== raw && !detectorBitmap.isRecycled) {
+              runCatching { detectorBitmap.recycle() }
+            }
+            if (rgb565 != null && rgb565 !== raw && !rgb565.isRecycled) {
+              runCatching { rgb565.recycle() }
+            }
+            if (raw != null && !raw.isRecycled) {
+              runCatching { raw.recycle() }
+            }
           }
-
-          val mergedHeadVeto = mergeHeadVetoRects(frameFaces, subjectMetrics.headVetoRect)
-
-          // 2. Per-zone edge variance (clutter), mean luminance, histogram, and split-seam check
-          val w = detectorBitmap.width
-          val h = detectorBitmap.height
-          val pixels = IntArray(w * h)
-          detectorBitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-
-          val (hist, isSplitFrame, zoneMetrics) =
-            analyzeFramePixelsForZones(
-              pixels = pixels,
-              width = w,
-              height = h,
-              headVetoRect = mergedHeadVeto,
-              subjectBbox = subjectMetrics.boundingBox,
-              subjectCentroidX = subjectMetrics.centroidX,
-              subjectCoverage = subjectMetrics.coverageFraction,
-              hasBottomHalfFace = hasBottomHalfFace,
-            )
-          if (isSplitFrame) splitSeamHits++
-
-          frameSamples.add(
-            FrameSampleVisual(
-              timestampMs = tsMs,
-              fingerprint = fingerprint,
-              hist = hist,
-              headVetoRect = mergedHeadVeto,
-              faceRects = frameFaces,
-              subjectCentroidX = subjectMetrics.centroidX,
-              subjectCentroidY = subjectMetrics.centroidY,
-              subjectCoverage = subjectMetrics.coverageFraction,
-              isSplitScreen = isSplitFrame,
-              zoneMetrics = zoneMetrics,
-            )
-          )
-
-          detectorBitmap.recycle()
-          raw.recycle()
         }
-      } catch (_: Exception) {
-        // Fallback safely
+      } catch (ce: CancellationException) {
+        throw ce
+      } catch (_: Throwable) {
+        // Fallback safely on any media/OOM error
       } finally {
         runCatching { retriever.release() }
       }
@@ -656,43 +800,40 @@ object VideoAnalysisService {
   ): List<TimestampedFrame> =
     withContext(Dispatchers.IO) {
       if (durationMs <= 0L) return@withContext emptyList()
+      val isLowRam = isLowRamAnalysisDevice(context)
+      val effectiveMaxFrames = if (isLowRam) min(maxFrames, LOW_RAM_MAX_FRAMES) else maxFrames
+      val maxDimPx = if (isLowRam) LOW_RAM_MAX_DIMENSION_PX else NORMAL_RAM_MAX_DIMENSION_PX
       val retriever = MediaMetadataRetriever()
       val out = mutableListOf<TimestampedFrame>()
       try {
         retriever.setDataSource(context, videoUri)
-        val stepUs = (durationMs * 1000L) / (maxFrames + 1)
-        for (i in 1..maxFrames) {
-          val tsUs = stepUs * i
-          val bmp =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-              retriever.getScaledFrameAtTime(
-                tsUs,
-                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                384,
-                384,
+        val stepUs = (durationMs * 1000L) / (effectiveMaxFrames + 1)
+        for (i in 1..effectiveMaxFrames) {
+          var bmp: Bitmap? = null
+          try {
+            val tsUs = stepUs * i
+            bmp = decodeDownscaledFrame(retriever, tsUs, maxDimPx) ?: continue
+            val baos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 72, baos)
+            out.add(
+              TimestampedFrame(
+                timestampMs = tsUs / 1000L,
+                base64Jpeg = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP),
               )
-            } else {
-              retriever.getFrameAtTime(tsUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { raw ->
-                val scale = 384f / max(1, max(raw.width, raw.height))
-                Bitmap.createScaledBitmap(
-                  raw,
-                  max(16, (raw.width * scale).toInt()),
-                  max(16, (raw.height * scale).toInt()),
-                  true,
-                ).also { if (it !== raw) raw.recycle() }
-              }
-            } ?: continue
-          val baos = ByteArrayOutputStream()
-          bmp.compress(Bitmap.CompressFormat.JPEG, 72, baos)
-          bmp.recycle()
-          out.add(
-            TimestampedFrame(
-              timestampMs = tsUs / 1000L,
-              base64Jpeg = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP),
             )
-          )
+          } catch (ce: CancellationException) {
+            throw ce
+          } catch (_: Throwable) {
+            // Skip frame safely on OOM
+          } finally {
+            if (bmp != null && !bmp.isRecycled) {
+              runCatching { bmp.recycle() }
+            }
+          }
         }
-      } catch (_: Exception) {
+      } catch (ce: CancellationException) {
+        throw ce
+      } catch (_: Throwable) {
         // Ignore gracefully
       } finally {
         runCatching { retriever.release() }

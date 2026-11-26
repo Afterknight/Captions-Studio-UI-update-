@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.captionstudio.data.local.AppDatabase
 import com.example.captionstudio.data.local.ProjectRepository
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.data.preferences.SettingsRepository
 import com.example.captionstudio.domain.model.AnimationDefaults
 import com.example.captionstudio.domain.model.AnimationEasingType
@@ -50,6 +51,8 @@ import com.example.captionstudio.media.VideoAutoTranscriber
 import com.example.captionstudio.media.VideoExportCoordinator
 import com.example.captionstudio.media.VoskTextSegment
 import com.example.captionstudio.media.VoskVideoTranscriptionService
+import com.example.captionstudio.media.isUnder4GbRamDevice
+import com.example.captionstudio.media.resolveOfflineAsrEngine
 import com.example.captionstudio.presets.PresetCatalog
 import com.example.captionstudio.presets.StyleDeepLinkCodec
 import com.example.captionstudio.typography.CuratedFontPairing
@@ -71,6 +74,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class BackgroundTaskHudState(
@@ -86,6 +91,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val settingsRepo = SettingsRepository(application)
   private val speechManager = SpeechTranscriptionManager(application)
   private val autoTranscriber = VideoAutoTranscriber(application)
+  private val persistMutex = Mutex()
 
   init {
     FontRegistry.loadCachedCustomFonts(application)
@@ -157,6 +163,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       viewModelScope,
       SharingStarted.WhileSubscribed(5000),
       "en-US",
+    )
+
+  val isUnder4GbRam: Boolean = isUnder4GbRamDevice(application)
+
+  val asrEnginePreference: StateFlow<AsrEnginePreference> =
+    settingsRepo.asrEnginePreference.stateIn(
+      viewModelScope,
+      SharingStarted.WhileSubscribed(5000),
+      AsrEnginePreference.AUTO,
     )
 
   val speechState: StateFlow<SpeechRecognitionState> = speechManager.state
@@ -320,27 +335,37 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun openProject(projectId: String) {
     val cached = projects.value.firstOrNull { it.id == projectId }
     if (cached != null) {
-      _activeProject.value = cached
+      val safeCached = ProjectRepository.sanitizeProject(cached)
+      _activeProject.value = safeCached
       _transcribedSegments.value =
-        if (cached.wordTimings.isNotEmpty()) {
-          VoskVideoTranscriptionService.segmentRecognizedWords(cached.wordTimings)
+        if (safeCached.wordTimings.isNotEmpty()) {
+          runCatching { VoskVideoTranscriptionService.segmentRecognizedWords(safeCached.wordTimings) }
+            .getOrDefault(emptyList())
         } else {
           emptyList()
         }
       _playheadMs.value = 0L
-      val firstComp = cached.compositions.firstOrNull()
+      val firstComp = safeCached.compositions.firstOrNull()
       _selectedCompositionId.value = firstComp?.id
       _selectedElementId.value = firstComp?.elements?.firstOrNull()?.id
     }
     viewModelScope.launch {
-      val loaded = projectRepo.getProject(projectId)
+      val loaded =
+        try {
+          projectRepo.getProject(projectId)?.let { ProjectRepository.sanitizeProject(it) }
+        } catch (ce: CancellationException) {
+          throw ce
+        } catch (_: Throwable) {
+          cached?.let { ProjectRepository.sanitizeProject(it) }
+        }
       undoStack.clear()
       redoStack.clear()
       refreshUndoFlags()
       _activeProject.value = loaded
       _transcribedSegments.value =
         if (loaded != null && loaded.wordTimings.isNotEmpty()) {
-          VoskVideoTranscriptionService.segmentRecognizedWords(loaded.wordTimings)
+          runCatching { VoskVideoTranscriptionService.segmentRecognizedWords(loaded.wordTimings) }
+            .getOrDefault(emptyList())
         } else {
           emptyList()
         }
@@ -427,7 +452,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           stepLabel = "Detecting subjects & safe zones...",
           progressFraction = 0.68f,
         )
-      val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
+      val analysis =
+        try {
+          VideoAnalysisService.analyzeLocally(ctx, uri, meta)
+        } catch (ce: CancellationException) {
+          throw ce
+        } catch (_: Throwable) {
+          com.example.captionstudio.domain.model.VideoAnalysisReport(
+            summary = "Scene framing fallback applied for low memory."
+          )
+        }
       val created =
         projectRepo.createProject(
           title = title,
@@ -530,7 +564,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               stepLabel = "Detecting subjects & safe zones...",
               progressFraction = 0.65f,
             )
-          val analysis = VideoAnalysisService.analyzeLocally(ctx, uri, meta)
+          val analysis =
+            try {
+              VideoAnalysisService.analyzeLocally(ctx, uri, meta)
+            } catch (ce: CancellationException) {
+              throw ce
+            } catch (_: Throwable) {
+              current.analysisReport
+            }
           val updated =
             current.copy(
               videoUriString = uri.toString(),
@@ -599,7 +640,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _transcribedSegments.value = VoskVideoTranscriptionService.segmentRecognizedWords(restored.wordTimings)
     refreshAudioWaveformAndBeats(restored)
     refreshUndoFlags()
-    viewModelScope.launch { projectRepo.saveProject(restored) }
+    persistValidatedProjectAsync(restored)
   }
 
   fun redo() {
@@ -611,19 +652,56 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _transcribedSegments.value = VoskVideoTranscriptionService.segmentRecognizedWords(restored.wordTimings)
     refreshAudioWaveformAndBeats(restored)
     refreshUndoFlags()
-    viewModelScope.launch { projectRepo.saveProject(restored) }
+    persistValidatedProjectAsync(restored)
   }
 
   private fun commitMutation(updated: CaptionProject, recordHistory: Boolean = true) {
+    val sanitized = ProjectRepository.sanitizeProject(updated)
     val current = _activeProject.value
-    if (recordHistory && current != null && current != updated) {
+    if (recordHistory && current != null && current != sanitized) {
       undoStack.addLast(current)
       while (undoStack.size > 30) undoStack.removeFirst()
       redoStack.clear()
       refreshUndoFlags()
     }
-    _activeProject.value = updated
-    viewModelScope.launch { projectRepo.saveProject(updated) }
+    _activeProject.value = sanitized
+    persistValidatedProjectAsync(sanitized)
+  }
+
+  /**
+   * Validates compositions cleanly through [CompositionValidator.validateAndRepair] before
+   * persisting updated `compositionsJson` and `analysisReportJson` to Room. Uses a mutex so
+   * concurrent edits never write out-of-order or partially validated states.
+   */
+  private fun persistValidatedProjectAsync(project: CaptionProject) {
+    viewModelScope.launch(Dispatchers.IO) {
+      persistMutex.withLock {
+        val validatedProject = validateForPersistenceOrNull(project) ?: return@withLock
+        projectRepo.saveProject(validatedProject)
+      }
+    }
+  }
+
+  private fun validateForPersistenceOrNull(project: CaptionProject): CaptionProject? {
+    return try {
+      val sanitized = ProjectRepository.sanitizeProject(project)
+      val validatedComps =
+        if (sanitized.compositions.isNotEmpty()) {
+          CompositionValidator.validateAndRepair(
+            context = getApplication(),
+            compositions = sanitized.compositions,
+            videoWidthPx = sanitized.metadata.effectiveWidth.coerceAtLeast(360),
+            videoHeightPx = sanitized.metadata.effectiveHeight.coerceAtLeast(360),
+          )
+        } else {
+          emptyList()
+        }
+      sanitized.copy(compositions = validatedComps)
+    } catch (ce: CancellationException) {
+      throw ce
+    } catch (_: Throwable) {
+      null
+    }
   }
 
   private fun refreshUndoFlags() {
@@ -820,6 +898,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         useOnlineGemini = false,
         geminiApiKey = null,
         geminiModelName = "",
+        asrEnginePreference = asrEnginePreference.value,
       )
 
     val latest = _activeProject.value ?: return
@@ -851,14 +930,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 progressFraction = 0.86f,
               )
             try {
-              runCatching {
-                VideoAnalysisService.analyzeLocally(
-                  context = getApplication(),
-                  videoUri = Uri.parse(latest.videoUriString),
-                  metadata = latest.metadata,
-                  targetTimestampsMs = targetSampleTimes,
-                )
-              }.getOrDefault(latest.analysisReport)
+              VideoAnalysisService.analyzeLocally(
+                context = getApplication(),
+                videoUri = Uri.parse(latest.videoUriString),
+                metadata = latest.metadata,
+                targetTimestampsMs = targetSampleTimes,
+              )
+            } catch (ce: CancellationException) {
+              throw ce
+            } catch (_: Throwable) {
+              latest.analysisReport
             } finally {
               _backgroundTaskState.value = BackgroundTaskHudState()
             }
@@ -959,14 +1040,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }
           val effectiveAnalysis =
             if (project.videoUriString.isNotBlank() && project.analysisReport.shotAnalyses.isEmpty()) {
-              runCatching {
+              try {
                 VideoAnalysisService.analyzeLocally(
                   context = getApplication(),
                   videoUri = Uri.parse(project.videoUriString),
                   metadata = project.metadata,
                   targetTimestampsMs = targetTimes,
                 )
-              }.getOrDefault(project.analysisReport)
+              } catch (ce: CancellationException) {
+                throw ce
+              } catch (_: Throwable) {
+                project.analysisReport
+              }
             } else {
               project.analysisReport
             }
@@ -1584,6 +1669,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun setSpeechLanguageTag(tag: String) {
     viewModelScope.launch { settingsRepo.setSpeechLanguageTag(tag) }
+  }
+
+  fun setAsrEnginePreference(preference: AsrEnginePreference) {
+    viewModelScope.launch { settingsRepo.setAsrEnginePreference(preference) }
+    val resolved = resolveOfflineAsrEngine(preference, isUnder4GbRam)
+    _statusBanner.value =
+      when (preference) {
+        AsrEnginePreference.AUTO -> "ASR Engine: Auto (${resolved.displayName})"
+        AsrEnginePreference.WHISPER_SMALL -> "ASR Engine: Whisper Small (high accuracy)"
+        AsrEnginePreference.VOSK_FAST -> "ASR Engine: Vosk Fast (low-RAM)"
+      }
   }
 
   fun refreshVoicePackStatuses(
@@ -2371,7 +2467,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   override fun onCleared() {
     super.onCleared()
     speechManager.stopListening()
-    autoTranscriber.cancel()
+    autoTranscriber.release()
     // Do NOT cancel active VideoExportForegroundService here so background exports complete reliably!
   }
 

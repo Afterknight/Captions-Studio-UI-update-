@@ -18,6 +18,15 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+enum class AsrEnginePreference(
+  val label: String,
+  val shortLabel: String,
+) {
+  AUTO("Auto (Whisper / Vosk)", "Auto"),
+  WHISPER_SMALL("Whisper Small", "Whisper Small"),
+  VOSK_FAST("Vosk Fast", "Vosk Fast"),
+}
+
 private val Context.studioDataStore: DataStore<Preferences> by
   preferencesDataStore(name = "caption_studio_prefs")
 
@@ -61,6 +70,12 @@ class SettingsRepository(private val context: Context) {
 
   val speechLanguageTag: Flow<String> =
     context.studioDataStore.data.map { prefs -> prefs[KEY_SPEECH_LANG] ?: "en-US" }
+
+  val asrEnginePreference: Flow<AsrEnginePreference> =
+    context.studioDataStore.data.map { prefs ->
+      val raw = prefs[KEY_ASR_ENGINE_PREFERENCE] ?: AsrEnginePreference.AUTO.name
+      runCatching { AsrEnginePreference.valueOf(raw) }.getOrDefault(AsrEnginePreference.AUTO)
+    }
 
   val customPresets: Flow<List<com.example.captionstudio.domain.model.PresetDefinition>> =
     context.studioDataStore.data.map { prefs ->
@@ -178,6 +193,10 @@ class SettingsRepository(private val context: Context) {
     context.studioDataStore.edit { it[KEY_SPEECH_LANG] = tag }
   }
 
+  suspend fun setAsrEnginePreference(preference: AsrEnginePreference) {
+    context.studioDataStore.edit { it[KEY_ASR_ENGINE_PREFERENCE] = preference.name }
+  }
+
   companion object {
     private val KEY_GEMINI_ENABLED = booleanPreferencesKey("gemini_enabled")
     private val KEY_GEMINI_MODE = stringPreferencesKey("gemini_mode")
@@ -191,6 +210,7 @@ class SettingsRepository(private val context: Context) {
     private val KEY_LAST_STATUS_MSG = stringPreferencesKey("gemini_last_status_msg")
     private val KEY_PREVIEW_QUALITY = stringPreferencesKey("preview_quality_mode")
     private val KEY_SPEECH_LANG = stringPreferencesKey("speech_language_tag")
+    private val KEY_ASR_ENGINE_PREFERENCE = stringPreferencesKey("asr_engine_preference")
     private val KEY_CUSTOM_PRESETS = stringPreferencesKey("custom_cloned_presets")
     private val KEY_CREATOR_MODE = booleanPreferencesKey("editor_creator_mode")
     private val KEY_PRO_UNLOCKED = booleanPreferencesKey("is_pro_unlocked")

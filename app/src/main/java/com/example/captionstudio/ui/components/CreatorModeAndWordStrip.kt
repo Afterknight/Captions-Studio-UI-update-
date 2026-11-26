@@ -25,18 +25,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -60,9 +66,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.R
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.domain.model.CaptionComposition
 import com.example.captionstudio.domain.model.CaptionProject
 import com.example.captionstudio.domain.model.DepthLayer
@@ -106,6 +117,11 @@ fun CreatorModeQuickPanel(
   customPresets: List<PresetDefinition>,
   safeZonePlatform: SafeZonePlatform,
   isBusy: Boolean,
+  asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
+  isUnder4GbRam: Boolean = false,
+  speechLanguageTag: String = "en-US",
+  onSetAsrEnginePreference: (AsrEnginePreference) -> Unit = {},
+  onSetSpeechLanguageTag: (String) -> Unit = {},
   onApplyPreset: (String) -> Unit,
   onScaleAllText: (Float) -> Unit,
   onSetAllHeight: (Float) -> Unit,
@@ -349,6 +365,17 @@ fun CreatorModeQuickPanel(
             active = false,
             onClick = onAutoTranscribe,
             modifier = Modifier.testTag("creator_transcribe_button"),
+          )
+          AsrEngineSelectorPill(
+            preference = asrEnginePreference,
+            isUnder4GbRam = isUnder4GbRam,
+            onSelectPreference = onSetAsrEnginePreference,
+            modifier = Modifier.testTag("creator_asr_engine_selector"),
+          )
+          CreatorLanguageSelectorPill(
+            selectedLanguageTag = speechLanguageTag,
+            onSelectLanguage = onSetSpeechLanguageTag,
+            modifier = Modifier.testTag("creator_language_selector"),
           )
           CreatorQuickToggleChip(
             icon = Icons.Filled.Bolt,
@@ -929,6 +956,239 @@ private fun CreatorQuickToggleChip(
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
       )
+    }
+  }
+}
+
+/**
+ * Compact, M3-compliant (48dp touch target) offline ASR engine selector pill letting any user
+ * (even on <4 GB RAM devices) switch cleanly between `Auto (Whisper / Vosk)`, `Whisper Small`,
+ * and `Vosk Fast`.
+ */
+@Composable
+fun AsrEngineSelectorPill(
+  preference: AsrEnginePreference,
+  isUnder4GbRam: Boolean,
+  onSelectPreference: (AsrEnginePreference) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val pillLabel =
+    when (preference) {
+      AsrEnginePreference.AUTO ->
+        if (isUnder4GbRam) stringResource(R.string.asr_engine_pill_auto_vosk)
+        else stringResource(R.string.asr_engine_pill_auto_whisper)
+      AsrEnginePreference.WHISPER_SMALL -> stringResource(R.string.asr_engine_pill_whisper)
+      AsrEnginePreference.VOSK_FAST -> stringResource(R.string.asr_engine_pill_vosk)
+    }
+  val selectorCd = stringResource(R.string.asr_engine_selector_cd)
+  val isManualOverride = preference != AsrEnginePreference.AUTO
+
+  Box(modifier = modifier) {
+    Surface(
+      onClick = { expanded = true },
+      color = if (isManualOverride) StudioCoralContainer else StudioElevated,
+      shape = CircleShape,
+      modifier =
+        Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+          .minimumInteractiveComponentSize()
+          .border(
+            1.dp,
+            if (isManualOverride) StudioCoral else StudioHairline,
+            CircleShape,
+          )
+          .semantics { contentDescription = "$selectorCd: $pillLabel" },
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Memory,
+          contentDescription = null,
+          tint = if (isManualOverride) StudioCoralLight else StudioTextSecondary,
+          modifier = Modifier.size(16.dp),
+        )
+        Text(
+          text = pillLabel,
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Medium,
+          color = if (isManualOverride) StudioCoralLight else StudioTextPrimary,
+          maxLines = 1,
+          softWrap = false,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+          imageVector = Icons.Filled.ArrowDropDown,
+          contentDescription = null,
+          tint = if (isManualOverride) StudioCoralLight else StudioTextSecondary,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      containerColor = StudioCard,
+    ) {
+      val options =
+        listOf(
+          Triple(
+            AsrEnginePreference.AUTO,
+            stringResource(R.string.asr_engine_option_auto),
+            if (isUnder4GbRam) stringResource(R.string.asr_engine_option_auto_sub_vosk)
+            else stringResource(R.string.asr_engine_option_auto_sub_whisper),
+          ),
+          Triple(
+            AsrEnginePreference.WHISPER_SMALL,
+            stringResource(R.string.asr_engine_option_whisper),
+            stringResource(R.string.asr_engine_option_whisper_sub),
+          ),
+          Triple(
+            AsrEnginePreference.VOSK_FAST,
+            stringResource(R.string.asr_engine_option_vosk),
+            stringResource(R.string.asr_engine_option_vosk_sub),
+          ),
+        )
+      options.forEach { (option, title, subtitle) ->
+        val isChosen = preference == option
+        DropdownMenuItem(
+          text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (isChosen) StudioCoralLight else StudioTextPrimary,
+              )
+              Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = StudioTextSecondary,
+              )
+            }
+          },
+          trailingIcon = {
+            if (isChosen) {
+              Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = StudioCoralLight,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          },
+          onClick = {
+            expanded = false
+            onSelectPreference(option)
+          },
+          modifier = Modifier.testTag("asr_engine_option_${option.name.lowercase()}"),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun CreatorLanguageSelectorPill(
+  selectedLanguageTag: String,
+  onSelectLanguage: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val languages =
+    remember {
+      listOf(
+        "en-US" to "English (US)",
+        "en-IN" to "English (IN)",
+        "hi-IN" to "Hindi / Hinglish",
+        "es-ES" to "Spanish",
+        "fr-FR" to "French",
+        "de-DE" to "German",
+        "auto" to "Auto Detect",
+      )
+    }
+  val shortCode =
+    when {
+      selectedLanguageTag.equals("auto", ignoreCase = true) -> "AUTO"
+      else -> selectedLanguageTag.substringBefore("-").uppercase()
+    }
+  val langCd = stringResource(R.string.asr_language_selector_cd)
+
+  Box(modifier = modifier) {
+    Surface(
+      onClick = { expanded = true },
+      color = StudioElevated,
+      shape = CircleShape,
+      modifier =
+        Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+          .minimumInteractiveComponentSize()
+          .border(1.dp, StudioHairline, CircleShape)
+          .semantics { contentDescription = "$langCd: $selectedLanguageTag" },
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Language,
+          contentDescription = null,
+          tint = StudioTextSecondary,
+          modifier = Modifier.size(16.dp),
+        )
+        Text(
+          text = shortCode,
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Medium,
+          color = StudioTextPrimary,
+          maxLines = 1,
+          softWrap = false,
+        )
+        Icon(
+          imageVector = Icons.Filled.ArrowDropDown,
+          contentDescription = null,
+          tint = StudioTextSecondary,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+    }
+
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      containerColor = StudioCard,
+    ) {
+      languages.forEach { (tag, label) ->
+        val isChosen = selectedLanguageTag.equals(tag, ignoreCase = true)
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = label,
+              style = MaterialTheme.typography.labelLarge,
+              fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Medium,
+              color = if (isChosen) StudioCoralLight else StudioTextPrimary,
+            )
+          },
+          trailingIcon = {
+            if (isChosen) {
+              Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = StudioCoralLight,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          },
+          onClick = {
+            expanded = false
+            onSelectLanguage(tag)
+          },
+          modifier = Modifier.testTag("creator_lang_option_${tag.lowercase()}"),
+        )
+      }
     }
   }
 }

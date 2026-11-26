@@ -78,6 +78,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.domain.model.AnimationEasingType
 import com.example.captionstudio.domain.model.ApplyScope
 import com.example.captionstudio.domain.model.CaptionComposition
@@ -1011,6 +1012,9 @@ internal fun TimingWorkspacePanel(
   onApplyAnimation: (String, ApplyScope, EntryAnimationType, ExitAnimationType, AnimationEasingType, Int, Int) -> Unit,
   waveformBins: List<Float> = emptyList(),
   beatTimestampsMs: List<Long> = emptyList(),
+  asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
+  isUnder4GbRam: Boolean = false,
+  onSetAsrEnginePreference: (AsrEnginePreference) -> Unit = {},
 ) {
   var subTab by remember { mutableIntStateOf(0) }
   var editingSegment by remember { mutableStateOf<VoskTextSegment?>(null) }
@@ -1285,6 +1289,9 @@ internal fun TimingWorkspacePanel(
               isDownloadingPack = activePackStatus?.isDownloading == true,
               packDownloadProgress = activePackStatus?.downloadProgress ?: 0f,
               onDownloadOfflinePack = onDownloadOfflinePack,
+              asrEnginePreference = asrEnginePreference,
+              isUnder4GbRam = isUnder4GbRam,
+              onSetAsrEnginePreference = onSetAsrEnginePreference,
             )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {

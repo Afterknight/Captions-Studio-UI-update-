@@ -149,8 +149,9 @@ object AudioSpeechAligner {
   }
 
   /**
-   * Refines AI-provided word timestamps against actual 10ms acoustic voice onsets/offsets
-   * within +/- 160ms so burned-in captions lock tightly to spoken audio.
+   * Refines ASR-provided word timestamps (Whisper Small / Vosk / Gemini) against actual 10ms
+   * acoustic vocal RMS energy peaks/onsets and offsets within +/- 160ms so Karaoke highlights,
+   * Beat Sync, and Word-Tap timelines lock within ±10ms of spoken audio.
    */
   fun refineWordTimings(
     words: List<WordTiming>,
@@ -158,6 +159,11 @@ object AudioSpeechAligner {
   ): List<WordTiming> {
     if (words.isEmpty() || envelope10ms.isEmpty()) return words
     val totalMs = envelope10ms.size * FRAME_MS
+    val sorted = envelope10ms.sortedArray()
+    val noiseFloor = sorted[(sorted.size * 0.20f).toInt().coerceIn(0, sorted.lastIndex)]
+    val peakEnergy = sorted[(sorted.size * 0.95f).toInt().coerceIn(0, sorted.lastIndex)]
+    val voicedThreshold = max(0.010f, max(noiseFloor * 2.0f, peakEnergy * 0.12f))
+
     var prevEnd = 0L
     return words.mapIndexed { idx, wt ->
       val safeStartRaw = max(prevEnd, wt.startMs.coerceIn(0L, totalMs))
@@ -168,15 +174,24 @@ object AudioSpeechAligner {
           minMs = prevEnd,
           maxMs = max(prevEnd, wt.endMs - 60L),
           searchRadiusMs = 160L,
+          voicedThreshold = voicedThreshold,
         )
       val nextLimit =
         if (idx < words.lastIndex) max(snappedStart + 80L, words[idx + 1].startMs + 80L)
         else totalMs
-      val safeEnd = max(snappedStart + 80L, wt.endMs.coerceAtMost(nextLimit))
-      prevEnd = safeEnd
+      val rawEnd = max(snappedStart + 80L, wt.endMs.coerceAtMost(nextLimit))
+      val snappedEnd =
+        snapToVocalOffset(
+          startMs = snappedStart,
+          targetEndMs = rawEnd,
+          envelope10ms = envelope10ms,
+          maxEndMs = nextLimit.coerceAtMost(totalMs),
+          voicedThreshold = voicedThreshold,
+        )
+      prevEnd = snappedEnd
       wt.copy(
         startMs = snappedStart,
-        endMs = safeEnd,
+        endMs = snappedEnd,
         isEstimated = false,
         emphasisScore =
           if (wt.emphasisScore != 0f) wt.emphasisScore
@@ -191,6 +206,7 @@ object AudioSpeechAligner {
     minMs: Long,
     maxMs: Long,
     searchRadiusMs: Long = 120L,
+    voicedThreshold: Float = 0.010f,
   ): Long {
     if (envelope10ms.size < 4) return targetMs.coerceIn(minMs, max(minMs, maxMs))
     val lowFrame = ((max(minMs, targetMs - searchRadiusMs)) / FRAME_MS).toInt().coerceIn(1, envelope10ms.lastIndex)
@@ -201,15 +217,56 @@ object AudioSpeechAligner {
     val targetFrame = targetMs / FRAME_MS.toFloat()
 
     for (f in lowFrame..highFrame) {
-      val rise = envelope10ms[f] - envelope10ms[f - 1]
-      val distPenalty = abs(f - targetFrame) * 0.002f
-      val score = rise - distPenalty
-      if (score > bestScore && envelope10ms[f] > 0.01f) {
+      val curr = envelope10ms[f]
+      if (curr < voicedThreshold) continue
+      val prev = envelope10ms[f - 1]
+      val next = if (f + 1 < envelope10ms.size) envelope10ms[f + 1] else curr
+      val rise10ms = (curr - prev).coerceAtLeast(0f)
+      val rise20ms = if (f >= 2) (curr - envelope10ms[f - 2]).coerceAtLeast(0f) * 0.5f else 0f
+      val localPeakBonus = if (curr >= prev && curr >= next) curr * 0.25f else 0f
+      val distPenalty = abs(f - targetFrame) * 0.0025f
+      val score = max(rise10ms, rise20ms) + localPeakBonus - distPenalty
+      if (score > bestScore) {
         bestScore = score
         bestFrame = f
       }
     }
     return (bestFrame * FRAME_MS).coerceIn(minMs, max(minMs, maxMs))
+  }
+
+  private fun snapToVocalOffset(
+    startMs: Long,
+    targetEndMs: Long,
+    envelope10ms: FloatArray,
+    maxEndMs: Long,
+    voicedThreshold: Float,
+  ): Long {
+    val minEndMs = startMs + 75L
+    if (envelope10ms.size < 4 || targetEndMs <= minEndMs) {
+      return max(minEndMs, targetEndMs).coerceAtMost(max(minEndMs, maxEndMs))
+    }
+    val startFrame = (startMs / FRAME_MS).toInt().coerceIn(0, envelope10ms.lastIndex)
+    val targetFrame = (targetEndMs / FRAME_MS).toInt().coerceIn(startFrame, envelope10ms.lastIndex)
+    val maxSearchFrame = (min(maxEndMs, targetEndMs + 80L) / FRAME_MS).toInt().coerceIn(targetFrame, envelope10ms.lastIndex)
+    val tailThreshold = voicedThreshold * 0.65f
+
+    // If audio is still actively voiced right at targetEndMs, extend slightly (up to +80ms) to vocal decay
+    if (envelope10ms[targetFrame] >= tailThreshold) {
+      var decayFrame = targetFrame
+      while (decayFrame < maxSearchFrame && envelope10ms[decayFrame] >= tailThreshold) {
+        decayFrame++
+      }
+      return (decayFrame * FRAME_MS).coerceIn(minEndMs, max(minEndMs, maxEndMs))
+    }
+
+    // Otherwise trim trailing silence back to the last voiced 10ms frame + 20ms natural decay tail
+    val minEndFrame = (minEndMs / FRAME_MS).toInt().coerceIn(startFrame, targetFrame)
+    var lastVoiced = targetFrame
+    while (lastVoiced > minEndFrame && envelope10ms[lastVoiced] < tailThreshold) {
+      lastVoiced--
+    }
+    val trimmedEndMs = (lastVoiced + 2) * FRAME_MS
+    return trimmedEndMs.coerceIn(minEndMs, max(minEndMs, targetEndMs))
   }
 
   private fun countSyllablesApprox(word: String): Int {

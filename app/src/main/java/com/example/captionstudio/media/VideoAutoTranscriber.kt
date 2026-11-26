@@ -1,5 +1,6 @@
 package com.example.captionstudio.media
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioFormat
@@ -13,6 +14,7 @@ import android.speech.SpeechRecognizer
 import android.util.Base64
 import com.example.captionstudio.ai.GeminiApiClient
 import com.example.captionstudio.ai.GeminiApiResult
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.domain.model.WordTiming
 import com.example.captionstudio.engine.AudioSpeechAligner
 import java.io.IOException
@@ -65,14 +67,59 @@ sealed interface AutoTranscribeResult {
   ) : AutoTranscribeResult
 }
 
+enum class ResolvedAsrEngine(val displayName: String) {
+  WHISPER_SMALL("Whisper Small"),
+  VOSK_FAST("Vosk Fast"),
+}
+
 /**
- * Coordinates automatic transcription of imported video audio tracks in both Offline Mode
- * ([VoskVideoTranscriptionService] with embedded Kaldi/Vosk ASR + 10ms acoustic alignment,
- * plus an Android 13+ system SpeechRecognizer fallback) and Online AI Mode (Gemini audio-to-word-timings).
+ * Hardware RAM classifier using [ActivityManager.getMemoryInfo]:
+ * Returns `true` if the OS marks the device as low-RAM OR total physical RAM is below
+ * `3_350_000_000L` bytes (~3.12 GiB), which reliably classifies physical 2 GB and 3 GB RAM
+ * Android devices while routing 4 GB+ devices to Whisper Small.
+ */
+fun isUnder4GbRamDevice(context: Context): Boolean {
+  val activityManager =
+    context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
+  val memoryInfo = ActivityManager.MemoryInfo()
+  activityManager.getMemoryInfo(memoryInfo)
+  return isUnder4GbRam(
+    isLowRamDevice = activityManager.isLowRamDevice,
+    totalMemBytes = memoryInfo.totalMem,
+  )
+}
+
+internal const val UNDER_4GB_RAM_THRESHOLD_BYTES: Long = 3_350_000_000L
+
+/** Pure deterministic RAM routing predicate for unit testing & runtime checks. */
+fun isUnder4GbRam(
+  isLowRamDevice: Boolean,
+  totalMemBytes: Long,
+): Boolean = isLowRamDevice || totalMemBytes < UNDER_4GB_RAM_THRESHOLD_BYTES
+
+/** Resolves the concrete offline ASR engine from user preference and device RAM tier. */
+fun resolveOfflineAsrEngine(
+  preference: AsrEnginePreference,
+  isUnder4GbRam: Boolean,
+): ResolvedAsrEngine =
+  when (preference) {
+    AsrEnginePreference.AUTO ->
+      if (isUnder4GbRam) ResolvedAsrEngine.VOSK_FAST else ResolvedAsrEngine.WHISPER_SMALL
+    AsrEnginePreference.WHISPER_SMALL -> ResolvedAsrEngine.WHISPER_SMALL
+    AsrEnginePreference.VOSK_FAST -> ResolvedAsrEngine.VOSK_FAST
+  }
+
+/**
+ * Coordinates automatic transcription of imported video audio tracks across BOTH offline ASR
+ * engines — high-accuracy **Whisper Small** ([WhisperVideoTranscriptionService]) and lightweight
+ * **Vosk Fast** ([VoskVideoTranscriptionService]) — with automatic `< 4 GB` RAM routing, manual
+ * user override, safe `OutOfMemoryError`/native fallback from Whisper to Vosk, and optional
+ * Android 13+ / Gemini AI fallback paths.
  */
 class VideoAutoTranscriber(private val context: Context) {
 
   val voskService = VoskVideoTranscriptionService(context)
+  val whisperService = WhisperVideoTranscriptionService(context)
 
   private val _state = MutableStateFlow(AutoTranscribeUiState())
   val state: StateFlow<AutoTranscribeUiState> = _state.asStateFlow()
@@ -83,8 +130,15 @@ class VideoAutoTranscriber(private val context: Context) {
   }
 
   fun cancel() {
+    whisperService.cancel()
+    OfflineWhisperModelManager.cancelActiveDownload()
     voskService.cancel()
     _state.value = _state.value.copy(isRunning = false, stageLabel = "", progressFraction = 0f)
+  }
+
+  fun release() {
+    cancel()
+    whisperService.close()
   }
 
   suspend fun transcribeVideo(
@@ -93,6 +147,7 @@ class VideoAutoTranscriber(private val context: Context) {
     useOnlineGemini: Boolean,
     geminiApiKey: String? = null,
     geminiModelName: String = "",
+    asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
   ): AutoTranscribeResult {
     _state.value =
       AutoTranscribeUiState(
@@ -156,6 +211,7 @@ class VideoAutoTranscriber(private val context: Context) {
               transcribeOfflineWithAcousticAlignment(
                 extracted = extracted,
                 languageTag = languageTag,
+                asrEnginePreference = asrEnginePreference,
               )
           ) {
             is AutoTranscribeResult.Success ->
@@ -171,6 +227,7 @@ class VideoAutoTranscriber(private val context: Context) {
         transcribeOfflineWithAcousticAlignment(
           extracted = extracted,
           languageTag = languageTag,
+          asrEnginePreference = asrEnginePreference,
         )
       }
 
@@ -300,10 +357,66 @@ class VideoAutoTranscriber(private val context: Context) {
   private suspend fun transcribeOfflineWithAcousticAlignment(
     extracted: ExtractedAudioTrack,
     languageTag: String,
+    asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
   ): AutoTranscribeResult {
-    // 1. Primary path on all Android versions (7.0+ / API 24+):
-    //    VoskVideoTranscriptionService decodes speech segments with embedded Kaldi/Vosk ASR
-    //    and snaps words to the 10ms acoustic envelope into editor-ready VoskTextSegments.
+    val under4Gb = isUnder4GbRamDevice(context)
+    val resolvedEngine = resolveOfflineAsrEngine(asrEnginePreference, under4Gb)
+    var fellBackFromWhisper = false
+
+    // 1. High-accuracy Whisper Small path (auto-selected on >=4 GB RAM devices or via user override).
+    //    Wrapped in catch (Throwable) including OutOfMemoryError / UnsatisfiedLinkError so
+    //    tight-memory or non-arm64 devices seamlessly fall back to Vosk Fast without ever crashing.
+    if (resolvedEngine == ResolvedAsrEngine.WHISPER_SMALL) {
+      val whisperRes: VoskTranscriptionResult? =
+        try {
+          whisperService.transcribeExtractedAudioToSegments(
+            extracted = extracted,
+            languageTag = languageTag,
+            autoInstallModelIfMissing = true,
+          ) { progress, label ->
+            _state.value = _state.value.copy(stageLabel = label, progressFraction = progress)
+          }
+        } catch (ce: CancellationException) {
+          throw ce
+        } catch (_: Throwable) {
+          // Includes OutOfMemoryError, UnsatisfiedLinkError, and native runtime errors
+          whisperService.release()
+          fellBackFromWhisper = true
+          _state.value =
+            _state.value.copy(
+              stageLabel = "Low memory / runtime fallback — switching to Vosk Fast...",
+              progressFraction = 0.40f,
+            )
+          null
+        }
+
+      when (whisperRes) {
+        is VoskTranscriptionResult.Success -> {
+          return AutoTranscribeResult.Success(
+            transcript = whisperRes.transcript,
+            wordTimings = whisperRes.wordTimings,
+            waveformBins = whisperRes.waveformBins,
+            engineLabel = whisperRes.engineLabel,
+            segments = whisperRes.segments,
+          )
+        }
+        is VoskTranscriptionResult.NoSpeechDetected -> {
+          return AutoTranscribeResult.NoSpeechDetected(whisperRes.waveformBins, whisperRes.message)
+        }
+        is VoskTranscriptionResult.ModelUnavailable -> {
+          fellBackFromWhisper = true
+          _state.value =
+            _state.value.copy(
+              stageLabel = "Whisper pack unavailable — falling back to Vosk Fast...",
+              progressFraction = 0.40f,
+            )
+        }
+        null -> Unit
+      }
+    }
+
+    // 2. Lightweight / Low-RAM Vosk Fast path (default on <4 GB RAM devices, user-selected Vosk Fast,
+    //    or automatic graceful fallback when Whisper encounters tight memory or unavailable download).
     val voskRes =
       voskService.transcribeExtractedAudioToSegments(
         extracted = extracted,
@@ -315,11 +428,14 @@ class VideoAutoTranscriber(private val context: Context) {
 
     when (voskRes) {
       is VoskTranscriptionResult.Success -> {
+        val label =
+          if (fellBackFromWhisper) "${voskRes.engineLabel} (Whisper Fallback)"
+          else voskRes.engineLabel
         return AutoTranscribeResult.Success(
           transcript = voskRes.transcript,
           wordTimings = voskRes.wordTimings,
           waveformBins = voskRes.waveformBins,
-          engineLabel = voskRes.engineLabel,
+          engineLabel = label,
           segments = voskRes.segments,
         )
       }
@@ -327,7 +443,7 @@ class VideoAutoTranscriber(private val context: Context) {
         return AutoTranscribeResult.NoSpeechDetected(voskRes.waveformBins, voskRes.message)
       }
       is VoskTranscriptionResult.ModelUnavailable -> {
-        // On Android < 13 there is no system audio-pipe SpeechRecognizer; report Vosk status cleanly.
+        // On Android < 13 there is no system audio-pipe SpeechRecognizer; report status cleanly.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
           return AutoTranscribeResult.Unavailable(voskRes.waveformBins, voskRes.reason)
         }

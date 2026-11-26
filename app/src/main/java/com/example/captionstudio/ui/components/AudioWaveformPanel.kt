@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.captionstudio.data.preferences.AsrEnginePreference
 import com.example.captionstudio.media.AutoTranscribeUiState
 import com.example.ui.theme.StudioCoral
 import com.example.ui.theme.StudioCoralLight
@@ -72,6 +73,9 @@ fun AutoTranscribeControlCard(
   isDownloadingPack: Boolean = false,
   packDownloadProgress: Float = 0f,
   onDownloadOfflinePack: (() -> Unit)? = null,
+  asrEnginePreference: AsrEnginePreference = AsrEnginePreference.AUTO,
+  isUnder4GbRam: Boolean = false,
+  onSetAsrEnginePreference: ((AsrEnginePreference) -> Unit)? = null,
 ) {
   StudioGlassCard(modifier = modifier.fillMaxWidth(), cornerRadius = 20.dp) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -102,6 +106,15 @@ fun AutoTranscribeControlCard(
         } else if (isOfflinePackInstalled) {
           StudioSubtlePill(text = "Offline ready", tint = StudioSuccess)
         }
+      }
+
+      if (onSetAsrEnginePreference != null) {
+        AsrEngineSelectorPill(
+          preference = asrEnginePreference,
+          isUnder4GbRam = isUnder4GbRam,
+          onSelectPreference = onSetAsrEnginePreference,
+          modifier = Modifier.testTag("transcript_asr_engine_selector"),
+        )
       }
 
       if (!isOfflinePackInstalled && onDownloadOfflinePack != null) {

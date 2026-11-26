@@ -101,4 +101,22 @@
     <string name="pro_sheet_preview_switch_title">Preview Pro State</string>
     <string name="pro_sheet_preview_switch_desc">Local test toggle before Google Play Billing is connected</string>
     <string name="pro_sheet_close_cd">Close Pro sheet</string>
+    <string name="asr_engine_pill_auto_whisper">ASR: Auto (Whisper)</string>
+    <string name="asr_engine_pill_auto_vosk">ASR: Auto (Vosk)</string>
+    <string name="asr_engine_pill_whisper">ASR: Whisper Small</string>
+    <string name="asr_engine_pill_vosk">ASR: Vosk Fast</string>
+    <string name="asr_engine_option_auto">Auto (Whisper / Vosk)</string>
+    <string name="asr_engine_option_auto_sub_whisper">Using Whisper Small (4 GB+ RAM detected)</string>
+    <string name="asr_engine_option_auto_sub_vosk">Using Vosk Fast (&lt;4 GB RAM detected)</string>
+    <string name="asr_engine_option_whisper">Whisper Small</string>
+    <string name="asr_engine_option_whisper_sub">High accuracy • ~190 MB offline pack</string>
+    <string name="asr_engine_option_vosk">Vosk Fast</string>
+    <string name="asr_engine_option_vosk_sub">Lightweight &amp; low-RAM • ~40 MB pack</string>
+    <string name="asr_engine_selector_cd">Select offline speech recognition engine</string>
+    <string name="asr_language_selector_cd">Select transcription language</string>
+    <string name="crash_dialog_title">Recovered from Unexpected Crash</string>
+    <string name="crash_dialog_subtitle">Caption Studio closed unexpectedly during the last session. Copy the crash log below to share diagnostics.</string>
+    <string name="crash_dialog_copy_button">Copy Crash Log</string>
+    <string name="crash_dialog_dismiss_button">Dismiss</string>
+    <string name="crash_dialog_copied_toast">Crash log copied to clipboard</string>
 </resources>

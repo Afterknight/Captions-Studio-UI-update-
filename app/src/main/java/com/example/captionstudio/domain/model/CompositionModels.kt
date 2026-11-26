@@ -379,11 +379,11 @@ data class WordTiming(
 @Immutable
 @Serializable
 data class CompositionElement(
-  val id: String,
-  val text: String,
-  val role: FontRole,
-  val hierarchyLevel: HierarchyLevel,
-  val fontFamilyId: String,
+  val id: String = "el_default",
+  val text: String = "",
+  val role: FontRole = FontRole.SUPPORTING,
+  val hierarchyLevel: HierarchyLevel = HierarchyLevel.SUPPORTING,
+  val fontFamilyId: String = "inter",
   val fontWeight: Int = 700,
   val isItalic: Boolean = false,
   val fontSizeSp: Float = 24f,

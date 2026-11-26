@@ -283,13 +283,22 @@ object SubjectMaskProcessor {
    * shots where traditional frontal FaceDetector misses the speaker's face.
    */
   fun analyzeSubjectMetrics(frameBitmap: Bitmap): SubjectMaskMetrics {
-    val downscaled = downscaleForSegmentation(frameBitmap, 192)
-    val raw = runSegmenterRawBlocking(stillSegmenter, downscaled)
-    if (downscaled !== frameBitmap) downscaled.recycle()
-    if (raw == null || raw.probs.isEmpty()) {
-      return SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
+    var downscaled: Bitmap? = null
+    return try {
+      downscaled = downscaleForSegmentation(frameBitmap, 192)
+      val raw = runSegmenterRawBlocking(stillSegmenter, downscaled)
+      if (raw == null || raw.probs.isEmpty()) {
+        SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
+      } else {
+        computeMetricsFromProbabilityMap(raw.probs, raw.width, raw.height)
+      }
+    } catch (_: Throwable) {
+      SubjectMaskMetrics(0f, 0.5f, 0.55f, null, null)
+    } finally {
+      if (downscaled != null && downscaled !== frameBitmap && !downscaled.isRecycled) {
+        runCatching { downscaled.recycle() }
+      }
     }
-    return computeMetricsFromProbabilityMap(raw.probs, raw.width, raw.height)
   }
 
   internal fun computeMetricsFromProbabilityMap(

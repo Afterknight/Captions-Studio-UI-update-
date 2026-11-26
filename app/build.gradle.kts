@@ -77,6 +77,12 @@ android {
     compose = true
     buildConfig = true
   }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+      pickFirsts += "lib/**/libc++_shared.so"
+    }
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -150,6 +156,7 @@ dependencies {
   implementation(libs.jna.aar) {
     artifact { type = "aar" }
   }
+  implementation(libs.whisper.android)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)

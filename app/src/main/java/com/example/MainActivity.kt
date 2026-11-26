@@ -1,6 +1,10 @@
 package com.example
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -23,11 +27,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,9 +51,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -53,8 +72,16 @@ import com.example.captionstudio.ui.screens.ExportScreen
 import com.example.captionstudio.ui.screens.ProjectGalleryScreen
 import com.example.ui.theme.CaptionStudioTheme
 import com.example.ui.theme.StudioCoral
+import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioObsidian
+import com.example.ui.theme.StudioTextPrimary
 import com.example.ui.theme.StudioTextSecondary
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.Serializable
 
@@ -97,6 +124,7 @@ fun CaptionStudioApp(
   val backgroundTaskState by studioViewModel.backgroundTaskState.collectAsStateWithLifecycle()
   val previewQuality by studioViewModel.previewQualityMode.collectAsStateWithLifecycle()
   val speechLanguage by studioViewModel.speechLanguageTag.collectAsStateWithLifecycle()
+  val asrEnginePreference by studioViewModel.asrEnginePreference.collectAsStateWithLifecycle()
   val speechState by studioViewModel.speechState.collectAsStateWithLifecycle()
   val autoTranscribeState by studioViewModel.autoTranscribeState.collectAsStateWithLifecycle()
   val exportState by studioViewModel.exportState.collectAsStateWithLifecycle()
@@ -321,6 +349,10 @@ fun CaptionStudioApp(
             onApplyPreset = studioViewModel::applyPreset,
             onApplyPairing = studioViewModel::applyCuratedPairing,
             speechLanguageTag = speechLanguage,
+            asrEnginePreference = asrEnginePreference,
+            isUnder4GbRam = studioViewModel.isUnder4GbRam,
+            onSetAsrEnginePreference = studioViewModel::setAsrEnginePreference,
+            onSetSpeechLanguageTag = studioViewModel::setSpeechLanguageTag,
             voicePackStatuses = voicePackStatuses,
             onDownloadVoicePackForLanguage = studioViewModel::downloadOfflineVoicePackForLanguage,
             isCreatorMode = isCreatorMode,
@@ -403,11 +435,162 @@ private fun EditorWorkspaceLoadingPlaceholder() {
   }
 }
 
+internal object CrashLogStore {
+  private const val PREFS_NAME = "caption_studio_crash_capture"
+  private const val KEY_LAST_CRASH_LOG = "last_crash_stack_trace"
+  private const val MAX_SAVED_CHARS = 12_000
+  private val handlerInstalled = AtomicBoolean(false)
+
+  fun installUncaughtExceptionHandler(context: Context) {
+    if (!handlerInstalled.compareAndSet(false, true)) return
+    val appContext = context.applicationContext ?: context
+    val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+      try {
+        val report = formatCrashReport(thread.name, throwable)
+        appContext
+          .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .edit()
+          .putString(KEY_LAST_CRASH_LOG, report)
+          .commit()
+      } catch (_: Throwable) {
+        // Never throw inside an uncaught exception handler
+      } finally {
+        previousHandler?.uncaughtException(thread, throwable)
+      }
+    }
+  }
+
+  fun formatCrashReport(threadName: String, throwable: Throwable): String {
+    val sw = StringWriter()
+    val pw = PrintWriter(sw)
+    val timestamp =
+      runCatching {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+      }.getOrDefault("unknown-time")
+    pw.println("Timestamp: $timestamp")
+    pw.println("Thread: $threadName")
+    pw.println("Device: ${Build.MANUFACTURER} ${Build.MODEL} (SDK ${Build.VERSION.SDK_INT})")
+    pw.println("---")
+    throwable.printStackTrace(pw)
+    pw.flush()
+    val full = sw.toString()
+    return if (full.length > MAX_SAVED_CHARS) full.take(MAX_SAVED_CHARS) + "\n…(truncated)" else full
+  }
+
+  fun readSavedCrashLog(context: Context): String? =
+    try {
+      context
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getString(KEY_LAST_CRASH_LOG, null)
+        ?.takeIf { it.isNotBlank() }
+    } catch (_: Throwable) {
+      null
+    }
+
+  fun clearSavedCrashLog(context: Context) {
+    runCatching {
+      context
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .remove(KEY_LAST_CRASH_LOG)
+        .apply()
+    }
+  }
+}
+
+@Composable
+private fun CrashRecoveryDialog(
+  crashLog: String,
+  onCopy: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val scrollState = rememberScrollState()
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = StudioElevated,
+    titleContentColor = StudioTextPrimary,
+    textContentColor = StudioTextSecondary,
+    title = {
+      Text(
+        text = stringResource(R.string.crash_dialog_title),
+        style = MaterialTheme.typography.titleMedium,
+        color = StudioTextPrimary,
+      )
+    },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          text = stringResource(R.string.crash_dialog_subtitle),
+          style = MaterialTheme.typography.bodySmall,
+          color = StudioTextSecondary,
+        )
+        Box(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .heightIn(min = 100.dp, max = 240.dp)
+              .clip(RoundedCornerShape(10.dp))
+              .background(StudioObsidian)
+              .padding(10.dp)
+              .verticalScroll(scrollState)
+              .testTag("crash_dialog_stack_trace"),
+        ) {
+          Text(
+            text = crashLog,
+            style =
+              MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+              ),
+            color = StudioTextPrimary,
+          )
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onCopy,
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = StudioCoral,
+            contentColor = StudioObsidian,
+          ),
+        modifier =
+          Modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .testTag("crash_dialog_copy_button"),
+      ) {
+        Text(text = stringResource(R.string.crash_dialog_copy_button))
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        modifier =
+          Modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .testTag("crash_dialog_dismiss_button"),
+      ) {
+        Text(
+          text = stringResource(R.string.crash_dialog_dismiss_button),
+          color = StudioTextSecondary,
+        )
+      }
+    },
+  )
+}
+
 class MainActivity : ComponentActivity() {
   private val pendingDeepLinkFlow = MutableStateFlow<String?>(null)
+  private val savedCrashLogFlow = MutableStateFlow<String?>(null)
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Register before super.onCreate so startup/restore crashes are captured deterministically.
+    CrashLogStore.installUncaughtExceptionHandler(applicationContext)
     super.onCreate(savedInstanceState)
+    savedCrashLogFlow.value = CrashLogStore.readSavedCrashLog(applicationContext)
     captureStyleDeepLink(intent)
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -415,11 +598,31 @@ class MainActivity : ComponentActivity() {
     )
     setContent {
       val deepLink by pendingDeepLinkFlow.collectAsStateWithLifecycle()
+      val crashLog by savedCrashLogFlow.collectAsStateWithLifecycle()
       CaptionStudioTheme {
         CaptionStudioApp(
           pendingDeepLink = deepLink,
           onDeepLinkConsumed = { pendingDeepLinkFlow.value = null },
         )
+        val pendingCrash = crashLog
+        if (!pendingCrash.isNullOrBlank()) {
+          CrashRecoveryDialog(
+            crashLog = pendingCrash,
+            onCopy = {
+              val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+              clipboard?.setPrimaryClip(ClipData.newPlainText("Caption Studio Crash Log", pendingCrash))
+              Toast.makeText(
+                this@MainActivity,
+                getString(R.string.crash_dialog_copied_toast),
+                Toast.LENGTH_SHORT,
+              ).show()
+            },
+            onDismiss = {
+              CrashLogStore.clearSavedCrashLog(applicationContext)
+              savedCrashLogFlow.value = null
+            },
+          )
+        }
       }
     }
   }
