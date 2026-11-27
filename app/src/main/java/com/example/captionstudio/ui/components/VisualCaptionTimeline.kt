@@ -87,7 +87,8 @@ fun clampTrimRange(
   val maxAllowedEnd = (nextCompStartMs ?: safeTotal).coerceIn(minAllowedStart + minDurationMs, safeTotal)
 
   var start = proposedStartMs.coerceIn(minAllowedStart, max(minAllowedStart, maxAllowedEnd - minDurationMs))
-  var end = proposedEndMs.coerceIn(start + minDurationMs, maxAllowedEnd)
+  val minEnd = min(start + minDurationMs, maxAllowedEnd)
+  var end = proposedEndMs.coerceIn(minEnd, maxAllowedEnd)
   if (end - start < minDurationMs) {
     end = min(maxAllowedEnd, start + minDurationMs)
     start = max(minAllowedStart, end - minDurationMs)
@@ -337,9 +338,11 @@ fun VisualCaptionTimeline(
             val latestDraftEnd by rememberUpdatedState(draftEndMs)
             val latestOnTrim by rememberUpdatedState(onTrimComposition)
 
-            val startPx = ((draftStartMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(0f, trackWidthPx)
-            val minBlockWidthPx = with(density) { 48.dp.toPx() }
-            val endPx = ((draftEndMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(startPx + minBlockWidthPx, trackWidthPx)
+            val minBlockWidthPx = min(with(density) { 48.dp.toPx() }, trackWidthPx)
+            val maxStartPx = (trackWidthPx - minBlockWidthPx).coerceAtLeast(0f)
+            val startPx = ((draftStartMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(0f, maxStartPx)
+            val minEndPx = min(startPx + minBlockWidthPx, trackWidthPx)
+            val endPx = ((draftEndMs.toFloat() / effectiveDurationMs.toFloat()) * trackWidthPx).coerceIn(minEndPx, trackWidthPx)
             val blockWidthDp = with(density) { (endPx - startPx).coerceAtLeast(minBlockWidthPx).toDp() }
             val blockTopPx = with(density) { 28.dp.toPx() }.roundToInt()
 
@@ -507,7 +510,8 @@ fun VisualCaptionTimeline(
             // Expanded 48dp x 84dp touch hit-area for RIGHT trim handle wrapping sleek 22dp visual handle bar
             val rightOutsetPx = min((trackWidthPx - endPx).coerceAtLeast(0f), padEachSidePx)
             val rightTouchX = (endPx + rightOutsetPx - handleTouchWidthPx).coerceAtLeast(0f).roundToInt()
-            val rightVisualOffsetPx = (endPx - visualHandleWidthPx - rightTouchX).coerceIn(0f, handleTouchWidthPx - visualHandleWidthPx)
+            val maxRightVisualOffsetPx = (handleTouchWidthPx - visualHandleWidthPx).coerceAtLeast(0f)
+            val rightVisualOffsetPx = (endPx - visualHandleWidthPx - rightTouchX).coerceIn(0f, maxRightVisualOffsetPx)
 
             Box(
               modifier =
